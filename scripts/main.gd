@@ -107,6 +107,11 @@ func _on_enemy_died(_pos: Vector3) -> void:
 	var drops := ["herb", "bloodsand", "bone", "ghostfire"]
 	player.add_item(drops[randi() % drops.size()], 1)
 	player.money += 15
+	player.save_game()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and player:
+		player.save_game()
 
 func _build_ui() -> void:
 	ui = CanvasLayer.new()
@@ -187,7 +192,7 @@ func _build_hud() -> void:
 
 	# 操作提示
 	var hint := Label.new()
-	hint.text = "WASD 移动 · Ctrl 跳 · 空格 闪避 · 左键/J 轻击 · 右键/K 重击 · C 识破 · Q 锁定 · Tab 行囊 · G 药铺 · H 锻造 · R/T/Y/U 服丹"
+	hint.text = "WASD 移动 · Ctrl 跳 · 空格 闪避 · 左键/J 轻击 · 右键/K 重击 · C 识破 · Q 锁定 · Tab 行囊 · G 药铺 · H 锻造 · B 键位 · F5/F9 存档读档"
 	hint.position = Vector2(20, 660)
 	hint.add_theme_color_override("font_color", Color(0.8, 0.8, 0.7, 0.8))
 	canvas.add_child(hint)

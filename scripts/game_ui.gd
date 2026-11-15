@@ -10,7 +10,23 @@ const TABS := [
 	{"id": "bag", "label": "行囊 (Tab)"},
 	{"id": "shop", "label": "药铺 (G)"},
 	{"id": "forge", "label": "锻造 (H)"},
+	{"id": "keys", "label": "键位 (B)"},
 ]
+
+const BINDABLE := [
+	{"action": "move_up", "label": "前进"},
+	{"action": "move_down", "label": "后退"},
+	{"action": "move_left", "label": "左移"},
+	{"action": "move_right", "label": "右移"},
+	{"action": "jump", "label": "跳跃"},
+	{"action": "dodge", "label": "闪避"},
+	{"action": "light_attack", "label": "轻击"},
+	{"action": "heavy_attack", "label": "重击"},
+	{"action": "parry", "label": "识破"},
+	{"action": "lock_on", "label": "锁定"},
+]
+
+var awaiting_action := ""
 
 var player: Node = null
 var root: Control
@@ -119,6 +135,22 @@ func refresh() -> void:
 		"forge":
 			title_label.text = "铁匠铺 · 锻器"
 			_build_forge()
+		"keys":
+			title_label.text = "键位设置"
+			_build_keys()
+
+func _input(event: InputEvent) -> void:
+	if not is_open or awaiting_action == "":
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ESCAPE:
+			awaiting_action = ""
+			refresh()
+		else:
+			player.rebind(awaiting_action, event.keycode)
+			awaiting_action = ""
+			refresh()
+		get_viewport().set_input_as_handled()
 
 # ---------------- 行囊 ----------------
 func _build_bag() -> void:
@@ -178,6 +210,18 @@ func _build_bag_row(id: String, def: Dictionary) -> void:
 
 # ---------------- 药铺 ----------------
 func _build_shop() -> void:
+	_add_note("— 购买 —")
+	var buy_list := ["pill_heal", "pill_chi", "pill_speed", "pill_guard", "herb", "bloodsand", "bone", "ghostfire"]
+	for id in buy_list:
+		var def := ItemDB.get_item(id)
+		var price: int = int(def.get("price", 0))
+		_add_row(
+			"%s  ×%d" % [def.get("name", id), player.count_item(id)],
+			"%s　售价 %d" % [def.get("desc", ""), price],
+			"购 买", player.money >= price,
+			func(): player.buy_item(id); refresh())
+
+	_add_note("— 炼制 —")
 	for r in ItemDB.RECIPES:
 		var out := ItemDB.get_item(String(r["out"]))
 		var cost_parts: Array = []
@@ -213,6 +257,17 @@ func _build_forge() -> void:
 		func(): player.forge_current(); refresh())
 	_add_note("锻造提升当前武器的伤害倍率，每级 +6%，上限 +5。切换武学会更换武器，锻造等级按武器分别记录。")
 	hint_label.text = "H 关闭"
+
+# ---------------- 键位 ----------------
+func _build_keys() -> void:
+	for b in BINDABLE:
+		var action := String(b["action"])
+		var label := String(b["label"])
+		var key_text := "按下新键…" if awaiting_action == action else player.key_label(action)
+		_add_row(label, "点击右侧按钮后按下新按键（Esc 取消）", key_text, true,
+			func(): awaiting_action = action; refresh())
+	_add_note("键位保存于 user://inkblade_keybinds.json，重启后仍然有效；鼠标左右键攻击不受影响。")
+	hint_label.text = "B 关闭 · F5 存档 · F9 读档"
 
 # ---------------- 行工具 ----------------
 func _add_row(title: String, desc: String, action: String, enabled: bool, cb: Callable) -> void:

@@ -86,11 +86,13 @@ func _ready() -> void:
 	collision_mask = 1 | (1 << 2)
 	add_to_group("player")
 	add_to_group("hurtbox")
+	load_bindings()
 	equip_style(StyleDB.DEFAULT_ID)
-	hp = get_max_hp()
-	stamina = get_max_stamina()
-	hp_changed.emit(hp, get_max_hp())
-	stamina_changed.emit(stamina, get_max_stamina())
+	if not load_game():
+		hp = get_max_hp()
+		stamina = get_max_stamina()
+		hp_changed.emit(hp, get_max_hp())
+		stamina_changed.emit(stamina, get_max_stamina())
 
 func _build_self() -> void:
 	# 胶囊碰撞
@@ -458,6 +460,111 @@ func forge_current() -> bool:
 func forge_bonus() -> float:
 	return 1.0 + 0.06 * forge_level(String(current_weapon.get("id", "staff")))
 
+# ---------------- 药铺购买 ----------------
+func buy_item(id: String) -> bool:
+	var def := ItemDB.get_item(id)
+	var price := int(def.get("price", 0))
+	if price <= 0 or money < price:
+		return false
+	money -= price
+	add_item(id, 1)
+	return true
+
+# ---------------- 存档 ----------------
+const SAVE_PATH := "user://inkblade_save.json"
+const BIND_PATH := "user://inkblade_keybinds.json"
+
+func save_game() -> void:
+	var data := {
+		"money": money,
+		"bag": bag,
+		"equipment": equipment,
+		"forge": forge_levels,
+		"hp": hp,
+		"stamina": stamina,
+		"style": String(current_style.get("id", StyleDB.DEFAULT_ID)),
+	}
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(data))
+		f.close()
+
+func load_game() -> bool:
+	if not FileAccess.file_exists(SAVE_PATH):
+		return false
+	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if not f:
+		return false
+	var data = JSON.parse_string(f.get_as_text())
+	f.close()
+	if typeof(data) != TYPE_DICTIONARY:
+		return false
+
+	money = int(data.get("money", money))
+	var saved_bag = data.get("bag", {})
+	if typeof(saved_bag) == TYPE_DICTIONARY:
+		for k in saved_bag:
+			bag[String(k)] = int(saved_bag[k])
+	var saved_forge = data.get("forge", {})
+	if typeof(saved_forge) == TYPE_DICTIONARY:
+		for k in saved_forge:
+			forge_levels[String(k)] = int(saved_forge[k])
+
+	# 先恢复武学（同时换武器），再逐槽恢复装备
+	equip_style(String(data.get("style", StyleDB.DEFAULT_ID)))
+	var saved_eq = data.get("equipment", {})
+	if typeof(saved_eq) == TYPE_DICTIONARY:
+		for slot in ["armor", "head", "accessory"]:
+			equip_item(slot, String(saved_eq.get(slot, "")))
+
+	hp = minf(float(data.get("hp", get_max_hp())), get_max_hp())
+	stamina = minf(float(data.get("stamina", get_max_stamina())), get_max_stamina())
+	hp_changed.emit(hp, get_max_hp())
+	stamina_changed.emit(stamina, get_max_stamina())
+	return true
+
+# ---------------- 键位自定义 ----------------
+var bindings := {}
+
+func load_bindings() -> void:
+	if not FileAccess.file_exists(BIND_PATH):
+		return
+	var f := FileAccess.open(BIND_PATH, FileAccess.READ)
+	if not f:
+		return
+	var data = JSON.parse_string(f.get_as_text())
+	f.close()
+	if typeof(data) == TYPE_DICTIONARY:
+		for k in data:
+			bindings[String(k)] = int(data[k])
+		for action in bindings:
+			_replace_key(String(action), int(bindings[action]))
+
+func _replace_key(action: String, code: int) -> void:
+	if not InputMap.has_action(action):
+		return
+	for ev in InputMap.action_get_events(action):
+		if ev is InputEventKey:
+			InputMap.action_erase_event(action, ev)
+	var k := InputEventKey.new()
+	k.keycode = code
+	InputMap.action_add_event(action, k)
+
+func rebind(action: String, code: int) -> void:
+	bindings[action] = code
+	_replace_key(action, code)
+	var f := FileAccess.open(BIND_PATH, FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(bindings))
+		f.close()
+	_refresh_ui()
+
+func key_label(action: String) -> String:
+	for ev in InputMap.action_get_events(action):
+		if ev is InputEventKey:
+			return OS.get_keycode_string((ev as InputEventKey).keycode)
+	return "—"
+
 func _scaled_move(base: Dictionary) -> Dictionary:
 	var m := base.duplicate()
 	var w := current_weapon
@@ -502,6 +609,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			if ui: ui.toggle("shop")
 		elif event.keycode == KEY_H:
 			if ui: ui.toggle("forge")
+		elif event.keycode == KEY_B:
+			if ui: ui.toggle("keys")
 		elif event.keycode == KEY_R:
 			use_item("pill_heal")
 		elif event.keycode == KEY_T:
@@ -512,6 +621,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			use_item("pill_guard")
 		elif event.keycode == KEY_F:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		elif event.keycode == KEY_F5:
+			save_game()
+		elif event.keycode == KEY_F9:
+			load_game()
 		elif event.keycode == KEY_1:
 			equip_style("staff_style")
 		elif event.keycode == KEY_2:
