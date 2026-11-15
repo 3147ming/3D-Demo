@@ -2,3 +2,6 @@
 .godot/
 export_presets.cfg
 *.tmp
+
+# 本地预备资源（不入库）
+预备资源/SceneLoadingManager/
