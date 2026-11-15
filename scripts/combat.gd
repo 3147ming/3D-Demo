@@ -14,6 +14,22 @@ const PLAYER_STAMINA_REGEN := 28.0   # 每秒
 const PLAYER_STAMINA_DELAY := 0.6    # 消耗后延迟回复
 const PLAYER_JUMP_VELOCITY := 6.0
 
+# ---------- 内力与法术 ----------
+const PLAYER_MAX_CHI := 100.0
+const PLAYER_CHI_REGEN := 16.0
+const PLAYER_CHI_DELAY := 1.0
+
+const SPELL_FREEZE := {"name": "定身", "cost": 30.0, "cd": 12.0, "duration": 3.0}
+const SPELL_BLINK := {"name": "移形闪", "cost": 20.0, "cd": 8.0, "distance": 5.5, "invuln": 0.35}
+const SPELL_SHIELD := {"name": "护身法", "cost": 40.0, "cd": 18.0, "duration": 8.0}
+
+const TRANSFORM_COST := 50.0
+const TRANSFORM_DURATION := 12.0
+const TRANSFORM_DAMAGE_MULT := 1.5
+const TRANSFORM_SPEED_MULT := 1.2
+const TRANSFORM_END_DAMAGE := 40.0
+const TRANSFORM_END_RADIUS := 5.0
+
 # 攻击段（轻击三连）
 const LIGHT_COMBO = [
 	{"dmg": 14, "poise": 10, "startup": 0.10, "active": 0.12, "recovery": 0.18, "stamina": 8, "reach": 2.4},

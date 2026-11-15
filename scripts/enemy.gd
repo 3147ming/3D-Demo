@@ -17,6 +17,9 @@ var poise: float = C.ENEMY_MAX_POISE
 var attack_timer := 0.0
 var attack_phase := ""   # startup / active / recovery
 var hurt_timer := 0.0
+var freeze_timer := 0.0
+var speed_mult := 1.0
+var dmg_mult := 1.0
 var broken_timer := 0.0
 var target: Node3D = null
 
@@ -76,6 +79,16 @@ func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
 		return
 
+	# 定身：完全停止行动
+	if freeze_timer > 0.0:
+		freeze_timer -= delta
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if not is_on_floor():
+			velocity.y -= 18.0 * delta
+		move_and_slide()
+		return
+
 	# 架势回复
 	if state != State.BROKEN and state != State.HURT:
 		poise = min(poise + C.ENEMY_POISE_REGEN * delta, C.ENEMY_MAX_POISE)
@@ -97,6 +110,9 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= 18.0 * delta
 	move_and_slide()
 
+func apply_freeze(seconds: float) -> void:
+	freeze_timer = maxf(freeze_timer, seconds)
+
 func _update_idle(_delta: float) -> void:
 	if target and is_instance_valid(target):
 		var d := global_position.distance_to(target.global_position)
@@ -112,7 +128,7 @@ func _update_chase(_delta: float) -> void:
 	var dist := dir.length()
 	look_at(global_position + dir.normalized(), Vector3.UP)
 	if dist > C.ENEMY_ATTACK_RANGE:
-		var mv := dir.normalized() * C.ENEMY_SPEED
+		var mv := dir.normalized() * C.ENEMY_SPEED * speed_mult
 		velocity.x = mv.x
 		velocity.z = mv.z
 	else:
@@ -133,7 +149,7 @@ func _update_attack(delta: float) -> void:
 		"startup":
 			attack_phase = "active"
 			attack_timer = 0.15
-			hitbox.activate(C.ENEMY_ATTACK_DMG, C.ENEMY_ATTACK_POISE, self, 8.0)
+			hitbox.activate(C.ENEMY_ATTACK_DMG * dmg_mult, C.ENEMY_ATTACK_POISE, self, 8.0)
 		"active":
 			hitbox.deactivate()
 			attack_phase = "recovery"

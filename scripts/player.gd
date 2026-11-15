@@ -4,6 +4,7 @@ class_name Player
 
 signal hp_changed(value: float, maxv: float)
 signal stamina_changed(value: float, maxv: float)
+signal chi_changed(value: float, maxv: float)
 
 const C = preload("res://scripts/combat.gd")
 
@@ -30,6 +31,14 @@ var dodge_timer := 0.0
 # 识破
 var parry_timer := 0.0
 var gait_phase := 0.0
+
+# 内力 / 法术 / 变身
+var chi: float = C.PLAYER_MAX_CHI
+var chi_timer := 0.0
+var spell_cd := {"freeze": 0.0, "blink": 0.0, "shield": 0.0}
+var transformed := false
+var transform_timer := 0.0
+var blink_invuln := 0.0
 
 # 相机
 var camera_pivot: Node3D
@@ -93,6 +102,8 @@ func _ready() -> void:
 		stamina = get_max_stamina()
 		hp_changed.emit(hp, get_max_hp())
 		stamina_changed.emit(stamina, get_max_stamina())
+	chi = C.PLAYER_MAX_CHI
+	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
 
 func _build_self() -> void:
 	# 胶囊碰撞
@@ -565,6 +576,65 @@ func key_label(action: String) -> String:
 			return OS.get_keycode_string((ev as InputEventKey).keycode)
 	return "—"
 
+# ---------------- 法术 / 变身 ----------------
+func _spell_ready(key: String, def: Dictionary) -> bool:
+	if float(spell_cd.get(key, 0.0)) > 0.0:
+		return false
+	var cost := float(def["cost"])
+	if chi < cost:
+		return false
+	chi -= cost
+	chi_timer = C.PLAYER_CHI_DELAY
+	spell_cd[key] = float(def["cd"])
+	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
+	return true
+
+func cast_freeze() -> bool:
+	if not _spell_ready("freeze", C.SPELL_FREEZE):
+		return false
+	for e in get_tree().get_nodes_in_group("enemy"):
+		if is_instance_valid(e) and e.has_method("apply_freeze"):
+			e.apply_freeze(float(C.SPELL_FREEZE["duration"]))
+	return true
+
+func cast_blink() -> bool:
+	if not _spell_ready("blink", C.SPELL_BLINK):
+		return false
+	global_position -= transform.basis.z * float(C.SPELL_BLINK["distance"])
+	blink_invuln = float(C.SPELL_BLINK["invuln"])
+	return true
+
+func cast_shield() -> bool:
+	if not _spell_ready("shield", C.SPELL_SHIELD):
+		return false
+	buff_guard = maxf(buff_guard, float(C.SPELL_SHIELD["duration"]))
+	return true
+
+func try_transform() -> void:
+	if transformed or chi < C.TRANSFORM_COST:
+		return
+	chi -= C.TRANSFORM_COST
+	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
+	transformed = true
+	transform_timer = C.TRANSFORM_DURATION
+	if body_pivot:
+		body_pivot.scale = Vector3(1.15, 1.15, 1.15)
+	if body_material:
+		body_material.emissive_enabled = true
+		body_material.emission = Color(0.55, 0.22, 0.10)
+
+func _end_transform() -> void:
+	transformed = false
+	transform_timer = 0.0
+	if body_pivot:
+		body_pivot.scale = Vector3.ONE
+	if body_material:
+		body_material.emissive_enabled = false
+	for e in get_tree().get_nodes_in_group("enemy"):
+		if is_instance_valid(e) and e.global_position.distance_to(global_position) <= C.TRANSFORM_END_RADIUS:
+			if e.has_method("take_hit"):
+				e.take_hit(C.TRANSFORM_END_DAMAGE, 40.0, global_position, 10.0)
+
 func _scaled_move(base: Dictionary) -> Dictionary:
 	var m := base.duplicate()
 	var w := current_weapon
@@ -573,7 +643,8 @@ func _scaled_move(base: Dictionary) -> Dictionary:
 	m["active"] = float(base.get("active", 0.1)) * sp
 	m["recovery"] = float(base.get("recovery", 0.2)) * sp
 	m["dmg"] = (float(base.get("dmg", 10.0)) + get_attack()) \
-		* float(w.get("damage_mult", 1.0)) * forge_bonus()
+		* float(w.get("damage_mult", 1.0)) * forge_bonus() \
+		* (C.TRANSFORM_DAMAGE_MULT if transformed else 1.0)
 	m["poise"] = float(base.get("poise", 10.0)) * float(w.get("poise_mult", 1.0))
 	m["stamina"] = float(base.get("stamina", 8.0)) * float(w.get("stamina_mult", 1.0))
 	if w.has("reach"):
@@ -619,8 +690,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			use_item("pill_speed")
 		elif event.keycode == KEY_U:
 			use_item("pill_guard")
+		elif event.keycode == KEY_Z:
+			cast_freeze()
+		elif event.keycode == KEY_X:
+			cast_blink()
+		elif event.keycode == KEY_V:
+			cast_shield()
 		elif event.keycode == KEY_F:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			try_transform()
+		elif event.keycode == KEY_P:
+			if ui: ui.toggle("help")
+		elif event.keycode == KEY_N:
+			if get_parent() and get_parent().has_method("cycle_weather"):
+				get_parent().cycle_weather()
+		elif event.keycode == KEY_M:
+			if get_parent() and get_parent().has_method("toggle_difficulty"):
+				get_parent().toggle_difficulty()
 		elif event.keycode == KEY_F5:
 			save_game()
 		elif event.keycode == KEY_F9:
@@ -659,6 +744,19 @@ func _physics_process(delta: float) -> void:
 
 	buff_speed = maxf(0.0, buff_speed - delta)
 	buff_guard = maxf(0.0, buff_guard - delta)
+
+	# 内力回复与法术冷却
+	chi_timer -= delta
+	if chi_timer <= 0.0:
+		chi = minf(chi + C.PLAYER_CHI_REGEN * delta, C.PLAYER_MAX_CHI)
+		chi_changed.emit(chi, C.PLAYER_MAX_CHI)
+	for k in spell_cd:
+		spell_cd[k] = maxf(0.0, float(spell_cd[k]) - delta)
+	blink_invuln = maxf(0.0, blink_invuln - delta)
+	if transformed:
+		transform_timer -= delta
+		if transform_timer <= 0.0:
+			_end_transform()
 
 	# 全局输入缓冲：攻击/闪避/识破在任何状态都能录入（用于连招衔接）
 	_handle_global_input()
@@ -803,7 +901,8 @@ func _update_move(delta: float) -> void:
 	# 相机前方为 -Z：W(input.y=-1) 应得到 z=-1，故直接用 input.y
 	var move_dir := (cam_basis * Vector3(input.x, 0, input.y)).normalized()
 
-	var speed := get_move_speed() * (1.3 if buff_speed > 0.0 else 1.0)
+	var speed := get_move_speed() * (1.3 if buff_speed > 0.0 else 1.0) \
+		* (C.TRANSFORM_SPEED_MULT if transformed else 1.0)
 	velocity.x = move_dir.x * speed
 	velocity.z = move_dir.z * speed
 	if not is_on_floor():
@@ -912,6 +1011,8 @@ func _update_dodge(delta: float) -> void:
 		state = State.IDLE
 
 func is_invincible() -> bool:
+	if blink_invuln > 0.0:
+		return true
 	return state == State.DODGE and (C.PLAYER_DODGE_DURATION - dodge_timer) < C.PLAYER_DODGE_IFRAME
 
 # ---------------- 识破 ----------------

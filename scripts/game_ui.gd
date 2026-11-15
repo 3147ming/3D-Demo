@@ -11,6 +11,7 @@ const TABS := [
 	{"id": "shop", "label": "药铺 (G)"},
 	{"id": "forge", "label": "锻造 (H)"},
 	{"id": "keys", "label": "键位 (B)"},
+	{"id": "help", "label": "刀谱 (P)"},
 ]
 
 const BINDABLE := [
@@ -138,6 +139,9 @@ func refresh() -> void:
 		"keys":
 			title_label.text = "键位设置"
 			_build_keys()
+		"help":
+			title_label.text = "刀谱 · 玩法说明"
+			_build_help()
 
 func _input(event: InputEvent) -> void:
 	if not is_open or awaiting_action == "":
@@ -268,6 +272,17 @@ func _build_keys() -> void:
 			func(): awaiting_action = action; refresh())
 	_add_note("键位保存于 user://inkblade_keybinds.json，重启后仍然有效；鼠标左右键攻击不受影响。")
 	hint_label.text = "B 关闭 · F5 存档 · F9 读档"
+
+# ---------------- 刀谱 ----------------
+func _build_help() -> void:
+	_add_note("【操作】WASD 移动 · Ctrl 跳跃 · 空格 闪避 · 左键/J 轻击 · 右键/K 重击 · C 识破 · Q 锁定")
+	_add_note("【法术】Z 定身（30 内力 / 12 秒冷却）· X 移形闪（20 / 8 秒）· V 护身法（40 / 18 秒）")
+	_add_note("【变身】F 消耗 50 内力，12 秒内伤害 ×1.5、移速 ×1.2，结束时对周围造成 40 伤害")
+	_add_note("【丹药】R 回春丹 · T 凝神散 · Y 清风散 · U 金刚散；也可在行囊里点服用")
+	_add_note("【架势】把敌人的金色架势条打空会使其崩坏硬直，此时伤害翻倍")
+	_add_note("【识破】敌人出招瞬间按 C，可在 0.3 秒窗口内免疫该次攻击")
+	_add_note("【系统】Tab 行囊 · G 药铺（购买 / 炼制）· H 锻造 · B 键位 · N 天气 · M 难度 · F5/F9 存读档")
+	hint_label.text = "P 关闭"
 
 # ---------------- 行工具 ----------------
 func _add_row(title: String, desc: String, action: String, enabled: bool, cb: Callable) -> void:
