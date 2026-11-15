@@ -64,11 +64,21 @@ var weapon_mesh: MeshInstance3D
 var hitbox: Hitbox
 var anim_tween: Tween
 
-# 武器 / 武学 / 装备
+# 武器 / 武学 / 装备 / 行囊
 var current_weapon: Dictionary = {}
 var current_style: Dictionary = {}
 var equipment := {"weapon": "", "armor": "", "head": "", "accessory": ""}
-var inventory: Array = []
+var bag := {
+	"pill_heal": 2, "pill_chi": 1, "pill_speed": 1, "pill_guard": 1,
+	"herb": 3, "bloodsand": 2, "bone": 2, "ghostfire": 1,
+	"cloth_robe": 1, "leather_armor": 1, "headband": 1, "ink_jade": 1,
+	"key_buddha": 1,
+}
+var money := 120
+var forge_levels := {}
+var buff_speed := 0.0
+var buff_guard := 0.0
+var ui: CanvasLayer = null
 
 func _ready() -> void:
 	_build_self()
@@ -76,8 +86,6 @@ func _ready() -> void:
 	collision_mask = 1 | (1 << 2)
 	add_to_group("player")
 	add_to_group("hurtbox")
-	for key in EquipDB.ITEMS:
-		inventory.append(key)
 	equip_style(StyleDB.DEFAULT_ID)
 	hp = get_max_hp()
 	stamina = get_max_stamina()
@@ -334,7 +342,7 @@ func equip_item(slot: String, id: String) -> bool:
 	if not EquipDB.SLOTS.has(slot) or slot == "weapon":
 		return false
 	if id != "":
-		if not inventory.has(id):
+		if count_item(id) <= 0:
 			return false
 		if String(EquipDB.get_item(id).get("slot", "")) != slot:
 			return false
@@ -359,6 +367,97 @@ func equip_item(slot: String, id: String) -> bool:
 func unequip_slot(slot: String) -> void:
 	equip_item(slot, "")
 
+# ---------------- 行囊 / 丹药 / 炼制 / 锻造 ----------------
+func count_item(id: String) -> int:
+	return int(bag.get(id, 0))
+
+func add_item(id: String, n: int = 1) -> void:
+	bag[id] = count_item(id) + n
+	_refresh_ui()
+
+func remove_item(id: String, n: int = 1) -> bool:
+	if count_item(id) < n:
+		return false
+	bag[id] = count_item(id) - n
+	_refresh_ui()
+	return true
+
+func _refresh_ui() -> void:
+	if ui and ui.has_method("refresh"):
+		ui.refresh()
+
+func use_item(id: String) -> bool:
+	var def := ItemDB.get_item(id)
+	if String(def.get("type", "")) != "pill" or count_item(id) <= 0:
+		return false
+	match String(def.get("effect", "")):
+		"heal":
+			if hp >= get_max_hp():
+				return false
+			hp = minf(hp + float(def.get("value", 45.0)), get_max_hp())
+			hp_changed.emit(hp, get_max_hp())
+		"stamina":
+			if stamina >= get_max_stamina():
+				return false
+			stamina = minf(stamina + float(def.get("value", 55.0)), get_max_stamina())
+			stamina_changed.emit(stamina, get_max_stamina())
+		"speed":
+			buff_speed = float(def.get("value", 10.0))
+		"guard":
+			buff_guard = float(def.get("value", 8.0))
+		_:
+			return false
+	bag[id] = count_item(id) - 1
+	_refresh_ui()
+	return true
+
+func craft(recipe: Dictionary) -> bool:
+	if recipe.is_empty():
+		return false
+	var cost: Dictionary = recipe.get("cost", {})
+	for k in cost:
+		if count_item(k) < int(cost[k]):
+			return false
+	if money < int(recipe.get("money", 0)):
+		return false
+	for k in cost:
+		bag[k] = count_item(k) - int(cost[k])
+	money -= int(recipe.get("money", 0))
+	bag[recipe["out"]] = count_item(String(recipe["out"])) + 1
+	_refresh_ui()
+	return true
+
+func forge_level(weapon_id: String) -> int:
+	return int(forge_levels.get(weapon_id, 0))
+
+func forge_cost() -> Dictionary:
+	var lv := forge_level(String(current_weapon.get("id", "staff")))
+	return {"herb": 2 + lv, "bone": 1 + lv, "money": 40 + lv * 30}
+
+func can_forge() -> bool:
+	var wid := String(current_weapon.get("id", "staff"))
+	if forge_level(wid) >= 5:
+		return false
+	var cost := forge_cost()
+	return count_item("herb") >= int(cost["herb"]) \
+		and count_item("bone") >= int(cost["bone"]) \
+		and money >= int(cost["money"])
+
+func forge_current() -> bool:
+	if not can_forge():
+		return false
+	var wid := String(current_weapon.get("id", "staff"))
+	var cost := forge_cost()
+	bag["herb"] = count_item("herb") - int(cost["herb"])
+	bag["bone"] = count_item("bone") - int(cost["bone"])
+	money -= int(cost["money"])
+	forge_levels[wid] = forge_level(wid) + 1
+	_refresh_ui()
+	return true
+
+func forge_bonus() -> float:
+	return 1.0 + 0.06 * forge_level(String(current_weapon.get("id", "staff")))
+
 func _scaled_move(base: Dictionary) -> Dictionary:
 	var m := base.duplicate()
 	var w := current_weapon
@@ -366,7 +465,8 @@ func _scaled_move(base: Dictionary) -> Dictionary:
 	m["startup"] = float(base.get("startup", 0.1)) * sp
 	m["active"] = float(base.get("active", 0.1)) * sp
 	m["recovery"] = float(base.get("recovery", 0.2)) * sp
-	m["dmg"] = (float(base.get("dmg", 10.0)) + get_attack()) * float(w.get("damage_mult", 1.0))
+	m["dmg"] = (float(base.get("dmg", 10.0)) + get_attack()) \
+		* float(w.get("damage_mult", 1.0)) * forge_bonus()
 	m["poise"] = float(base.get("poise", 10.0)) * float(w.get("poise_mult", 1.0))
 	m["stamina"] = float(base.get("stamina", 8.0)) * float(w.get("stamina_mult", 1.0))
 	if w.has("reach"):
@@ -384,12 +484,32 @@ func _unhandled_input(event: InputEvent) -> void:
 		yaw -= event.relative.x * 0.003
 		pitch = clamp(pitch - event.relative.y * 0.003, -0.5, 0.35)
 	elif event is InputEventMouseButton and event.pressed:
+		# 菜单打开时把鼠标交给 UI
+		if ui and ui.is_open:
+			return
 		# 仅在鼠标可见时点击才重捕获；已捕获时左右键留给攻击 action
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			if ui and ui.is_open:
+				ui.close()
+			else:
+				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		elif event.keycode == KEY_TAB:
+			if ui: ui.toggle("bag")
+		elif event.keycode == KEY_G:
+			if ui: ui.toggle("shop")
+		elif event.keycode == KEY_H:
+			if ui: ui.toggle("forge")
+		elif event.keycode == KEY_R:
+			use_item("pill_heal")
+		elif event.keycode == KEY_T:
+			use_item("pill_chi")
+		elif event.keycode == KEY_Y:
+			use_item("pill_speed")
+		elif event.keycode == KEY_U:
+			use_item("pill_guard")
 		elif event.keycode == KEY_F:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		elif event.keycode == KEY_1:
@@ -412,6 +532,20 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
 		return
+
+	# 菜单打开时暂停角色动作
+	if ui and ui.is_open:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if not is_on_floor():
+			velocity.y -= 18.0 * delta
+		move_and_slide()
+		_update_pose(delta)
+		_update_camera(delta)
+		return
+
+	buff_speed = maxf(0.0, buff_speed - delta)
+	buff_guard = maxf(0.0, buff_guard - delta)
 
 	# 全局输入缓冲：攻击/闪避/识破在任何状态都能录入（用于连招衔接）
 	_handle_global_input()
@@ -556,7 +690,7 @@ func _update_move(delta: float) -> void:
 	# 相机前方为 -Z：W(input.y=-1) 应得到 z=-1，故直接用 input.y
 	var move_dir := (cam_basis * Vector3(input.x, 0, input.y)).normalized()
 
-	var speed := get_move_speed()
+	var speed := get_move_speed() * (1.3 if buff_speed > 0.0 else 1.0)
 	velocity.x = move_dir.x * speed
 	velocity.z = move_dir.z * speed
 	if not is_on_floor():
@@ -698,8 +832,10 @@ func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0) ->
 	if is_parrying():
 		# 识破成功：反弹架势伤害给攻击者（此处简单处理）
 		return
-	# 防御减伤，至少造成 1 点
+	# 防御减伤，至少造成 1 点；金刚散期间再减半
 	var actual := maxf(1.0, dmg - get_defense())
+	if buff_guard > 0.0:
+		actual *= 0.5
 	hp = maxf(hp - actual, 0.0)
 	hp_changed.emit(hp, get_max_hp())
 	var dir := (global_position - from_pos).normalized()

@@ -5,6 +5,7 @@ class_name Enemy
 signal hp_changed(value: float, maxv: float)
 signal posture_changed(value: float, maxv: float)
 signal posture_broken_signal
+signal died(pos: Vector3)
 
 const C = preload("res://scripts/combat.gd")
 
@@ -179,4 +180,5 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> 
 	if hp <= 0:
 		hp = 0
 		state = State.DEAD
+		died.emit(global_position)
 		queue_free()

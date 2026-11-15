@@ -6,12 +6,16 @@ const EnemyScript = preload("res://scripts/enemy.gd")
 
 var player: CharacterBody3D
 var enemy: CharacterBody3D
+var ui: CanvasLayer
+var money_label: Label
+var buff_label: Label
 
 func _ready() -> void:
 	_build_world()
 	_spawn_player()
 	_spawn_enemy()
 	_build_hud()
+	_build_ui()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _build_world() -> void:
@@ -97,6 +101,34 @@ func _spawn_enemy() -> void:
 	enemy.set_script(EnemyScript)
 	enemy.position = Vector3(0, 0, -4)
 	add_child(enemy)
+	enemy.died.connect(_on_enemy_died)
+
+func _on_enemy_died(_pos: Vector3) -> void:
+	var drops := ["herb", "bloodsand", "bone", "ghostfire"]
+	player.add_item(drops[randi() % drops.size()], 1)
+	player.money += 15
+
+func _build_ui() -> void:
+	ui = CanvasLayer.new()
+	ui.set_script(load("res://scripts/game_ui.gd"))
+	add_child(ui)
+	ui.setup(player)
+	player.ui = ui
+
+func _process(_delta: float) -> void:
+	if money_label and player:
+		money_label.text = "铜钱 %d" % player.money
+	if buff_label and player:
+		var parts: Array = []
+		if player.buff_speed > 0.0:
+			parts.append("清风 %.0fs" % player.buff_speed)
+		if player.buff_guard > 0.0:
+			parts.append("金刚 %.0fs" % player.buff_guard)
+		var wid := String(player.current_weapon.get("id", ""))
+		var lv := player.forge_level(wid)
+		if lv > 0:
+			parts.append("锻造 +%d" % lv)
+		buff_label.text = "　".join(parts)
 
 func _build_hud() -> void:
 	var canvas := CanvasLayer.new()
@@ -155,7 +187,20 @@ func _build_hud() -> void:
 
 	# 操作提示
 	var hint := Label.new()
-	hint.text = "WASD 移动 · Ctrl 跳跃 · 空格 闪避 · 左键/J 轻击 · 右键/K 重击 · C 识破 · Q 锁定 · 1/2 武学 · 3-6 装备 · 0 卸下"
+	hint.text = "WASD 移动 · Ctrl 跳 · 空格 闪避 · 左键/J 轻击 · 右键/K 重击 · C 识破 · Q 锁定 · Tab 行囊 · G 药铺 · H 锻造 · R/T/Y/U 服丹"
 	hint.position = Vector2(20, 660)
 	hint.add_theme_color_override("font_color", Color(0.8, 0.8, 0.7, 0.8))
 	canvas.add_child(hint)
+
+	# 铜钱 / 丹药状态
+	money_label = Label.new()
+	money_label.text = "铜钱 120"
+	money_label.position = Vector2(20, 74)
+	money_label.add_theme_color_override("font_color", Color(0.85, 0.72, 0.42))
+	canvas.add_child(money_label)
+
+	buff_label = Label.new()
+	buff_label.position = Vector2(20, 96)
+	buff_label.add_theme_font_size_override("font_size", 12)
+	buff_label.add_theme_color_override("font_color", Color(0.68, 0.78, 0.72))
+	canvas.add_child(buff_label)
