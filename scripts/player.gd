@@ -9,6 +9,8 @@ signal chi_changed(value: float, maxv: float)
 const C = preload("res://scripts/combat.gd")
 const GlbLoader = preload("res://scripts/glb_loader.gd")
 
+@onready var sfx: Node = get_node("/root/Sfx")
+
 # ---- 模型接入：把文件放到 assets/models/ 下即可自动生效，缺省则用程序化人形 ----
 const VISUAL_PATH := "res://assets/models/player.glb"
 const VISUAL_HEIGHT := 1.8   # 模型统一缩放到的身高（米），按需要改
@@ -22,6 +24,16 @@ const ANIM_HINTS := {
 	"hurt": ["hurt", "hit", "damage", "impact"],
 	"death": ["death", "die", "dead"],
 }
+# 循环播放的动画（其余按一次性处理）
+const LOOP_WORDS := ["idle", "walk", "run", "blocking", "spellcasting", "aiming"]
+# 轻击连段动画（KayKit 命名，按 combo_idx 取用；模型没有这些动画时自动回退）
+const ATTACK_CLIPS := [
+	"1H_Melee_Attack_Slice_Diagonal",
+	"1H_Melee_Attack_Slice_Horizontal",
+	"1H_Melee_Attack_Chop",
+	"1H_Melee_Attack_Stab",
+]
+const HEAVY_CLIP := "2H_Melee_Attack_Spin"
 
 # 状态
 enum State { IDLE, MOVE, ATTACK, DODGE, PARRY, HURT, DEAD }
@@ -155,6 +167,7 @@ func _setup_visual() -> void:
 	anim_player = r["anim"]
 	if anim_player != null:
 		anim_map = GlbLoader.auto_map(r["clips"], ANIM_HINTS)
+		GlbLoader.configure_loops(anim_player, LOOP_WORDS)
 		print("[玩家模型] 动画映射：", anim_map)
 	# 有真实模型后隐藏程序化人形（节点保留，逻辑仍可运行）
 	if body_pivot != null:
@@ -499,7 +512,7 @@ func use_item(id: String) -> bool:
 		_:
 			return false
 	bag[id] = count_item(id) - 1
-	Sfx.play("coin")
+	sfx.play("coin")
 	_refresh_ui()
 	return true
 
@@ -666,7 +679,7 @@ func _spell_ready(key: String, def: Dictionary) -> bool:
 	chi_timer = C.PLAYER_CHI_DELAY
 	spell_cd[key] = float(def["cd"])
 	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
-	Sfx.play("spell")
+	sfx.play("spell")
 	return true
 
 func cast_freeze() -> bool:
@@ -697,7 +710,7 @@ func try_transform() -> void:
 	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
 	transformed = true
 	transform_timer = C.TRANSFORM_DURATION
-	Sfx.play("transform")
+	sfx.play("transform")
 	if body_pivot:
 		body_pivot.scale = Vector3(1.15, 1.15, 1.15)
 	if body_material:
@@ -940,9 +953,9 @@ func _sync_anim() -> void:
 		State.MOVE:
 			want = _clip("run")
 		State.ATTACK:
-			want = _clip("attack")
+			want = _attack_clip()
 		State.DODGE:
-			want = _clip("dodge")
+			want = _dodge_clip()
 		State.PARRY:
 			want = _clip("parry")
 		State.HURT:
@@ -964,6 +977,33 @@ func _clip(key: String) -> String:
 	if v == "":
 		v = String(anim_map.get("idle", ""))
 	return v
+
+## 攻击动画：重击用旋转斩，轻击按连段序号切换不同挥砍
+func _attack_clip() -> String:
+	if anim_player == null:
+		return ""
+	if heavy_flag and anim_player.has_animation(HEAVY_CLIP):
+		return HEAVY_CLIP
+	if ATTACK_CLIPS.size() > 0:
+		var idx: int = clampi(combo_idx, 0, ATTACK_CLIPS.size() - 1)
+		var nm: String = ATTACK_CLIPS[idx]
+		if anim_player.has_animation(nm):
+			return nm
+	return _clip("attack")
+
+## 闪避动画：按实际闪避方向选 前/后/左/右
+func _dodge_clip() -> String:
+	if anim_player == null:
+		return ""
+	var local: Vector3 = global_transform.basis.inverse() * dodge_dir
+	var nm := "Dodge_Forward"
+	if absf(local.x) > absf(local.z):
+		nm = "Dodge_Right" if local.x > 0.0 else "Dodge_Left"
+	else:
+		nm = "Dodge_Forward" if local.z < 0.0 else "Dodge_Backward"
+	if anim_player.has_animation(nm):
+		return nm
+	return _clip("dodge")
 
 # ---------------- 武器拖尾 ----------------
 func _get_weapon_tip_pos() -> Vector3:
@@ -1176,7 +1216,7 @@ func _start_heavy_charge() -> void:
 	velocity.x = 0
 	velocity.z = 0
 	_update_charge_visual()
-	Sfx.play("swing")
+	sfx.play("swing")
 
 ## 更新蓄力视觉（武器发光强度）
 func _update_charge_visual() -> void:
@@ -1223,13 +1263,13 @@ func _release_heavy_charge() -> void:
 	_start_attack(atk, "neutral", true, level)
 
 # ---------------- 攻击 ----------------
-func _start_attack(atk: Dictionary, dir: String = "neutral", heavy: bool = false, charge_level: int = 0) -> void:
+func _start_attack(atk: Dictionary, _dir: String = "neutral", heavy: bool = false, charge_level: int = 0) -> void:
 	if stamina < float(atk.get("stamina", 8.0)):
 		return
 	heavy_flag = heavy
 	var stamina_cost: float = float(atk.get("stamina", 8.0))
 	stamina -= stamina_cost
-	Sfx.play("swing")
+	sfx.play("swing")
 	stamina_changed.emit(stamina, get_max_stamina())
 	stamina_timer = C.PLAYER_STAMINA_DELAY
 	state = State.ATTACK
@@ -1269,7 +1309,7 @@ func _start_attack(atk: Dictionary, dir: String = "neutral", heavy: bool = false
 	# 命中阶段：rot_from → rot_to，激活 hitbox
 	anim_tween.tween_callback(func():
 		trail_active = true
-		hitbox.activate(float(atk["dmg"]), float(atk["poise"]), self, 6.0 + charge_level * 2.0, heavy))
+		hitbox.activate(float(atk["dmg"]), float(atk["poise"]), self, 6.0 + charge_level * 2.0, heavy)
 	)
 	anim_tween.tween_property(weapon_pivot, "rotation", rot_to, active_t)
 	anim_tween.tween_callback(func():
@@ -1337,7 +1377,7 @@ func _start_dodge(dir: Vector3) -> void:
 	dodge_dir = dir.normalized()
 	dodge_timer = C.PLAYER_DODGE_DURATION
 	stamina -= C.PLAYER_DODGE_COST
-	Sfx.play("dodge")
+	sfx.play("dodge")
 	stamina_changed.emit(stamina, get_max_stamina())
 	stamina_timer = C.PLAYER_STAMINA_DELAY
 	look_at(global_position + dodge_dir, Vector3.UP)
@@ -1358,7 +1398,7 @@ func is_invincible() -> bool:
 func _start_parry() -> void:
 	state = State.PARRY
 	parry_timer = C.PARRY_WINDOW
-	Sfx.play("parry")
+	sfx.play("parry")
 
 func _update_parry(delta: float) -> void:
 	parry_timer -= delta
@@ -1392,7 +1432,7 @@ func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0) ->
 		actual *= 0.5
 	hp = maxf(hp - actual, 0.0)
 	hp_changed.emit(hp, get_max_hp())
-	Sfx.play("hurt")
+	sfx.play("hurt")
 	var dir := (global_position - from_pos).normalized()
 	velocity.x = dir.x * kback
 	velocity.z = dir.z * kback

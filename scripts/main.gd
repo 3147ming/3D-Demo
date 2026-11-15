@@ -3,6 +3,9 @@ extends Node3D
 
 const PlayerScript = preload("res://scripts/player.gd")
 const EnemyScript = preload("res://scripts/enemy.gd")
+const C = preload("res://scripts/combat.gd")
+
+@onready var sfx: Node = get_node("/root/Sfx")
 
 var player: CharacterBody3D
 var enemies: Array = []
@@ -55,7 +58,6 @@ func _build_world() -> void:
 	env.environment.fog_enabled = true
 	env.environment.fog_light_color = Color(0.12, 0.10, 0.14)
 	env.environment.fog_density = 0.018
-	env.environment.fog_height_enabled = true
 	env.environment.fog_height = 1.0
 	env.environment.fog_height_density = 0.5
 	# SSAO
@@ -70,7 +72,8 @@ func _build_world() -> void:
 	env.environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
 	env.environment.glow_hdr_threshold = 0.8
 	env.environment.glow_hdr_scale = 2.0
-	env.environment.glow_levels = 7
+	for i in range(1, 8):
+		env.environment.set("glow_levels/" + str(i), true)
 	# 色彩分级（暗部偏冷青，亮部偏暖橙）
 	env.environment.color_correction_enabled = true
 	env.environment.tonemap_mode = Environment.TONE_MAPPER_ACES
@@ -181,7 +184,7 @@ func _on_enemy_died(_pos: Vector3, e: Node) -> void:
 	var drops := ["herb", "bloodsand", "bone", "ghostfire"]
 	player.add_item(drops[randi() % drops.size()], 1)
 	player.money += 15
-	Sfx.play("coin")
+	sfx.play("coin")
 	player.save_game()
 	respawn_timer = 7.0
 	# 击杀慢镜头
@@ -202,7 +205,7 @@ func release_attack(e: Node) -> void:
 
 # ---------------- 命中反馈 ----------------
 ## 玩家命中敌人时由 player 回调
-func on_player_hit(pos: Vector3, dmg: float, heavy: bool, arc: String) -> void:
+func on_player_hit(pos: Vector3, dmg: float, heavy: bool, _arc: String) -> void:
 	# 命中停顿
 	var frames: int = C.HIT_STOP_HEAVY if heavy else C.HIT_STOP_LIGHT
 	if dmg >= 30.0:
@@ -217,7 +220,7 @@ func on_player_hit(pos: Vector3, dmg: float, heavy: bool, arc: String) -> void:
 	_spawn_hit_vfx(pos, heavy)
 
 ## 敌人命中玩家时由 enemy 回调
-func on_enemy_hit(pos: Vector3, dmg: float, heavy: bool) -> void:
+func on_enemy_hit(pos: Vector3, _dmg: float, _heavy: bool) -> void:
 	_trigger_hit_stop(C.HIT_STOP_LIGHT)
 	_trigger_shake(C.SHAKE_HEAVY, 0.3)
 	_spawn_hit_vfx(pos, false)
@@ -232,12 +235,12 @@ func _trigger_shake(intensity: float, duration: float) -> void:
 	shake_duration = maxf(shake_duration, duration)
 	shake_timer = shake_duration
 
-func _trigger_slowmo(duration: float, scale: float) -> void:
+func _trigger_slowmo(duration: float, time_scale_value: float) -> void:
 	slowmo_timer = maxf(slowmo_timer, duration)
-	slowmo_scale = scale
+	slowmo_scale = time_scale_value
 	# 若没有命中停顿在生效，立即进入慢镜头
 	if hit_stop_frames <= 0:
-		Engine.time_scale = scale
+		Engine.time_scale = time_scale_value
 
 ## 命中粒子：火花 + 地面尘环
 func _spawn_hit_vfx(pos: Vector3, heavy: bool) -> void:

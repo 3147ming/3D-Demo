@@ -10,6 +10,8 @@ signal died(pos: Vector3)
 const C = preload("res://scripts/combat.gd")
 const GlbLoader = preload("res://scripts/glb_loader.gd")
 
+@onready var sfx: Node = get_node("/root/Sfx")
+
 # ---- 模型接入：把文件放到 assets/models/ 下即可自动生效 ----
 const VISUAL_PATH := "res://assets/models/enemy.glb"
 const VISUAL_HEIGHT := 2.0
@@ -21,6 +23,13 @@ const ANIM_HINTS := {
 	"hurt": ["hurt", "hit", "damage", "impact"],
 	"death": ["death", "die", "dead"],
 }
+const LOOP_WORDS := ["idle", "walk", "run", "blocking", "spellcasting", "aiming"]
+# 敌人攻击动画（随机挑一个，避免每个敌人动作雷同）
+const ATTACK_CLIPS := [
+	"1H_Melee_Attack_Chop",
+	"1H_Melee_Attack_Slice_Diagonal",
+	"1H_Melee_Attack_Slice_Horizontal",
+]
 
 enum State { IDLE, CHASE, ATTACK, HURT, BROKEN, DEAD }
 var state := State.IDLE
@@ -50,6 +59,7 @@ var visual_root: Node3D = null
 var anim_player: AnimationPlayer = null
 var anim_map: Dictionary = {}
 var current_anim := ""
+var attack_clip := ""
 
 func _ready() -> void:
 	_build_self()
@@ -71,6 +81,7 @@ func _setup_visual() -> void:
 	anim_player = r["anim"]
 	if anim_player != null:
 		anim_map = GlbLoader.auto_map(r["clips"], ANIM_HINTS)
+		GlbLoader.configure_loops(anim_player, LOOP_WORDS)
 	if body_mesh != null:
 		body_mesh.visible = false
 	if weapon_arm != null:
@@ -175,7 +186,7 @@ func _sync_anim() -> void:
 		State.CHASE:
 			want = _clip("run") if moving else _clip("idle")
 		State.ATTACK:
-			want = _clip("attack")
+			want = _attack_clip()
 		State.HURT, State.BROKEN:
 			want = _clip("hurt")
 		State.DEAD:
@@ -190,6 +201,12 @@ func _clip(key: String) -> String:
 	if v == "":
 		v = String(anim_map.get("idle", ""))
 	return v
+
+## 攻击动画：优先用 _start_attack 随机选中的那个
+func _attack_clip() -> String:
+	if anim_player != null and attack_clip != "" and anim_player.has_animation(attack_clip):
+		return attack_clip
+	return _clip("attack")
 
 func _update_idle(_delta: float) -> void:
 	if target and is_instance_valid(target):
@@ -244,6 +261,10 @@ func _start_attack() -> void:
 	state = State.ATTACK
 	velocity.x = 0.0
 	velocity.z = 0.0
+	# 随机挑一种挥砍，避免所有敌人动作雷同
+	attack_clip = ""
+	if ATTACK_CLIPS.size() > 0:
+		attack_clip = ATTACK_CLIPS[randi() % ATTACK_CLIPS.size()]
 	# 佯攻：虚晃一枪后撤，逼迫玩家提前闪避
 	if randf() < feint_chance:
 		attack_phase = "feint"
@@ -304,7 +325,7 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> 
 			dmg *= 2.0
 	hp -= dmg
 	hp_changed.emit(hp, C.ENEMY_MAX_HP)
-	Sfx.play("hit")
+	sfx.play("hit")
 	var dir := (global_position - from_pos).normalized()
 	velocity.x = dir.x * kback
 	velocity.z = dir.z * kback
@@ -323,6 +344,6 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> 
 		hp = 0
 		state = State.DEAD
 		_release_token()
-		Sfx.play("death")
+		sfx.play("death")
 		died.emit(global_position)
 		queue_free()

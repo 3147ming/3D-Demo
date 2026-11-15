@@ -63,27 +63,52 @@ static func _global_aabb(root: Node3D) -> AABB:
 
 ## 递归查找第一个 AnimationPlayer
 static func _find_anim_player(root: Node3D) -> AnimationPlayer:
-	if root is AnimationPlayer:
-		return root as AnimationPlayer
 	for node in root.find_children("*", "AnimationPlayer", true, false):
 		return node as AnimationPlayer
 	return null
 
 ## 按关键词自动匹配动画名（返回 key -> clip 名称）
+## 优先级：完全相等 > 前缀匹配 > 包含匹配
+## 这样 KayKit 的 "Idle" 不会被 "2H_Melee_Idle" 抢走，"Hit_A" 不会被 "Block_Hit" 抢走
 static func auto_map(clips: PackedStringArray, hints: Dictionary) -> Dictionary:
 	var map := {}
 	for key in hints.keys():
 		map[key] = ""
 	for key in hints.keys():
 		var words: Array = hints[key]
-		for clip in clips:
-			var low := String(clip).to_lower()
-			var matched := false
+		for mode in range(3):   # 0=相等 1=前缀 2=包含
 			for w in words:
-				if low.contains(String(w)):
-					matched = true
+				var kw := String(w).to_lower()
+				for clip in clips:
+					var low := String(clip).to_lower()
+					var hit := false
+					if mode == 0:
+						hit = low == kw
+					elif mode == 1:
+						hit = low.begins_with(kw)
+					else:
+						hit = low.contains(kw)
+					if hit:
+						map[key] = String(clip)
+						break
+				if map[key] != "":
 					break
-			if matched:
-				map[key] = String(clip)
+			if map[key] != "":
 				break
 	return map
+
+## 设置动画循环：待机/跑动等循环播放，攻击/受击/死亡等只播一次
+static func configure_loops(anim: AnimationPlayer, loop_words: Array) -> void:
+	if anim == null:
+		return
+	for nm in anim.get_animation_list():
+		var a := anim.get_animation(nm)
+		if a == null:
+			continue
+		var low := String(nm).to_lower()
+		var loop := false
+		for w in loop_words:
+			if low.contains(String(w)):
+				loop = true
+				break
+		a.loop_mode = Animation.LOOP_LINEAR if loop else Animation.LOOP_NONE

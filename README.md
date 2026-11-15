@@ -85,15 +85,18 @@ ink-blade-godot/
 
 **已做成"放文件就生效"**：把模型放到指定位置、改成指定名字，运行后自动替换，不用改代码。没放文件时继续用程序化占位模型。
 
-### 第一步：准备一个 GLB
+### 第一步：确认当前 KayKit 模型
 
-没有模型的话，建议先用免费资源试通流程：
+项目已经放好两个可直接使用的 GLB，均为 Kay Lousberg 的 **CC0** 素材，可免费用于个人和商业项目，贴图已内嵌：
 
-- [Kenney Animated Characters](https://kenney.nl/assets/animated-characters-2)：CC0 免费，直接给 GLB，自带待机/跑/攻击动画，最适合第一次测试
-- [Sketchfab](https://sketchfab.com/)：搜 "character glb"，可下载项里选 glTF/GLB
-- [Mixamo](https://www.mixamo.com/)：免费角色+动作，但导出是 FBX，需在 Blender 转 GLB
+| 用途 | 项目文件 | 原始模型 | 动画数 |
+|---|---|---|---|
+| 玩家 | `assets/models/player.glb` | Adventures / `Rogue_Hooded.glb` | 76 |
+| 敌人 | `assets/models/enemy.glb` | Skeletons / `Skeleton_Warrior.glb` | 95 |
 
-用 Blender 导出时检查三件事：脚底在原点附近、身高约 1.8 米；格式选 **glTF 2.0 → GLB** 并勾选 **Include → Animations**；贴图内嵌进 GLB 而非引用外部 png。
+另外已下载 `KayKit-Dungeon-Remastered-1.0`，可供后续搭建地牢关卡。完整素材包位于 `D:\Projects\冒险\美术`。
+
+如果要换成自己的模型，导出时检查三件事：脚底在原点附近、身高约 1.8 米；格式选 **glTF 2.0 → GLB** 并勾选 **Include → Animations**；贴图内嵌进 GLB 而非引用外部 png。
 
 ### 第二步：放进项目
 
@@ -117,9 +120,10 @@ ink-blade-godot/assets/models/
 加载成功会打印：
 
 ```text
-[玩家模型] 已加载 res://assets/models/player.glb | 缩放 1.023 | 动画 5 个
-[玩家模型] 动画列表：idle, run, attack, hurt, death
-[玩家模型] 动画映射：{"idle": "idle", "run": "run", ...}
+[玩家模型] 已加载 res://assets/models/player.glb | 缩放 0.800 | 动画 76 个
+[玩家模型] 动画列表：Idle, Running_A, 1H_Melee_Attack_Chop, ...
+[玩家模型] 动画映射：{"idle": "Idle", "run": "Running_A", ...}
+[敌人模型] 已加载 res://assets/models/enemy.glb | 缩放 0.772 | 动画 95 个
 ```
 
 | 输出 | 含义 |
@@ -130,10 +134,10 @@ ink-blade-godot/assets/models/
 
 ### 第五步：方向或大小不对
 
-**方向反了（背对镜头）**：打开 `scripts/player.gd`，在 `_setup_visual()` 末尾加一行：
+**方向反了（背对镜头）**：打开 `scripts/player.gd` 或 `scripts/enemy.gd`，把脚本顶部的朝向常量改成 `PI`：
 
 ```gdscript
-visual_root.rotation.y = PI
+const VISUAL_YAW := PI
 ```
 
 **大小不对**：改脚本顶部常量即可。加载器会按包围盒自动把模型缩放到该身高，并自动贴地，不用手算缩放：
