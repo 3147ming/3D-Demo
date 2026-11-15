@@ -77,6 +77,24 @@ var anim_tween: Tween
 var current_weapon: Dictionary = {}
 var current_style: Dictionary = {}
 var equipment := {"weapon": "", "armor": "", "head": "", "accessory": ""}
+
+# 蓄力重击
+var heavy_charging := false
+var heavy_charge_time := 0.0
+var heavy_charge_level := 0
+
+# 武器拖尾
+var trail_points: Array = []
+var trail_mesh: ImmediateMesh
+var trail_mi: MeshInstance3D
+var trail_active := false
+var trail_color: Color = Color(0.7, 0.85, 1.0)
+var current_attack_step := 0.0      # 当前攻击前进步伐总距离
+var current_attack_step_done := 0.0 # 已前进距离
+var current_attack_body_turn := 0.0 # 身体目标转向弧度
+var current_attack_body_turn_done := 0.0
+var weapon_emissive: StandardMaterial3D = null
+var shake_offset: Vector3 = Vector3.ZERO  # 外部写入的屏幕震动偏移
 var bag := {
 	"pill_heal": 2, "pill_chi": 1, "pill_speed": 1, "pill_guard": 1,
 	"herb": 3, "bloodsand": 2, "bone": 2, "ghostfire": 1,
@@ -192,6 +210,21 @@ func _build_self() -> void:
 	hitbox.add_child(hs)
 	hitbox.position = Vector3(0, 0.15, -1.4)
 	weapon_pivot.add_child(hitbox)
+	hitbox.hit_landed.connect(_on_hit_landed)
+
+	# 武器拖尾（ImmediateMesh 绘制带状轨迹）
+	trail_mesh = ImmediateMesh.new()
+	trail_mi = MeshInstance3D.new()
+	trail_mi.mesh = trail_mesh
+	var tmat := StandardMaterial3D.new()
+	tmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	tmat.albedo_color = Color(1, 1, 1, 0.8)
+	tmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	tmat.emissive_enabled = true
+	tmat.emission = Color(0.6, 0.8, 1.0)
+	tmat.emission_energy_multiplier = 2.0
+	trail_mi.material_override = tmat
+	add_child(trail_mi)
 
 	# 相机（放置在 +Z 侧，相机自身看向 -Z，正好面向角色）
 	camera_pivot = Node3D.new()
@@ -264,10 +297,13 @@ func equip_weapon(id: String) -> void:
 
 func _build_weapon_mesh(w: Dictionary) -> MeshInstance3D:
 	var spec: Dictionary = w.get("mesh", {})
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = spec.get("color", Color(0.7, 0.7, 0.7))
-	mat.roughness = 0.45
-	mat.metallic = 0.3 if spec.get("shape", "cylinder") == "box" else 0.0
+	weapon_emissive = StandardMaterial3D.new()
+	weapon_emissive.albedo_color = spec.get("color", Color(0.7, 0.7, 0.7))
+	weapon_emissive.roughness = 0.35
+	weapon_emissive.metallic = 0.6 if spec.get("shape", "cylinder") == "box" else 0.2
+	weapon_emissive.emissive_enabled = true
+	weapon_emissive.emission = Color(0.15, 0.12, 0.08)
+	weapon_emissive.emission_energy_multiplier = 0.5
 
 	var mi := MeshInstance3D.new()
 	match spec.get("shape", "cylinder"):
@@ -290,7 +326,7 @@ func _build_weapon_mesh(w: Dictionary) -> MeshInstance3D:
 			tm.height = 0.3
 			tip.mesh = tm
 			tip.position = Vector3(0, spec.get("length", 2.8) + 0.15, 0)
-			tip.material_override = mat
+			tip.material_override = weapon_emissive
 			mi.add_child(tip)
 		_:
 			var cm2 := CylinderMesh.new()
@@ -299,7 +335,7 @@ func _build_weapon_mesh(w: Dictionary) -> MeshInstance3D:
 			cm2.height = spec.get("length", 2.2)
 			mi.mesh = cm2
 			mi.position = Vector3(0, spec.get("length", 2.2) * 0.5, 0)
-	mi.material_override = mat
+	mi.material_override = weapon_emissive
 	return mi
 
 func _apply_reach(reach: float) -> void:
@@ -786,6 +822,7 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 
 	_update_pose(delta)
+	_update_trail(delta)
 	_update_camera(delta)
 	_update_marker()
 
@@ -807,10 +844,14 @@ func _update_pose(delta: float) -> void:
 	gait_phase += delta * (6.0 + 6.0 * amp)
 
 	if state == State.ATTACK:
-		# 持械臂跟随武器挥动，另一侧维持平衡
-		arm_R.rotation.x = lerp(arm_R.rotation.x, weapon_pivot.rotation.x * 0.75, 0.45)
-		forearm_R.rotation.x = lerp(forearm_R.rotation.x, weapon_pivot.rotation.x * 0.25, 0.4)
+		# 持械臂跟随武器挥动（多轴），另一侧维持平衡
+		var wrx: float = weapon_pivot.rotation.x
+		var wry: float = weapon_pivot.rotation.y
+		arm_R.rotation.x = lerp(arm_R.rotation.x, wrx * 0.75, 0.45)
+		arm_R.rotation.y = lerp(arm_R.rotation.y, wry * 0.5, 0.4)
+		forearm_R.rotation.x = lerp(forearm_R.rotation.x, wrx * 0.25, 0.4)
 		arm_L.rotation.x = lerp(arm_L.rotation.x, 0.25, 0.2)
+		arm_L.rotation.y = lerp(arm_L.rotation.y, -wry * 0.3, 0.3)
 		leg_L.rotation.x = lerp(leg_L.rotation.x, 0.18, 0.15)
 		leg_R.rotation.x = lerp(leg_R.rotation.x, -0.12, 0.15)
 		calf_L.rotation.x = lerp(calf_L.rotation.x, -0.15, 0.15)
@@ -840,6 +881,58 @@ func _update_pose(delta: float) -> void:
 		arm_R.rotation.x = lerp(arm_R.rotation.x, -breathe, 0.12)
 		forearm_L.rotation.x = lerp(forearm_L.rotation.x, 0.0, 0.12)
 		forearm_R.rotation.x = lerp(forearm_R.rotation.x, 0.0, 0.12)
+
+# ---------------- 武器拖尾 ----------------
+func _get_weapon_tip_pos() -> Vector3:
+	# 武器尖端：weapon_pivot 本地 Y 轴正向
+	var reach: float = float(current_weapon.get("reach", 2.4)) * 0.55
+	return weapon_pivot.global_position + weapon_pivot.global_transform.basis.y * reach
+
+func _update_trail(_delta: float) -> void:
+	if not trail_mesh:
+		return
+	if not trail_active:
+		if trail_points.size() > 0:
+			# 快速淡出并清空
+			trail_points.clear()
+			trail_mesh.clear_surfaces()
+		return
+	# 记录尖端位置
+	trail_points.append(_get_weapon_tip_pos())
+	while trail_points.size() > C.TRAIL_MAX_POINTS:
+		trail_points.pop_front()
+	# 绘制带状拖尾
+	trail_mesh.clear_surfaces()
+	if trail_points.size() < 2:
+		return
+	trail_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
+	var cam_dir: Vector3 = (camera.global_position - global_position).normalized() if camera else Vector3.FORWARD
+	for i in range(trail_points.size()):
+		var p: Vector3 = trail_points[i]
+		var alpha: float = float(i) / float(trail_points.size())
+		var width: float = C.TRAIL_WIDTH * alpha
+		# 计算垂直于轨迹与视线的偏移方向
+		var tangent: Vector3
+		if i > 0:
+			tangent = (p - trail_points[i - 1]).normalized()
+		else:
+			tangent = (trail_points[i + 1] - p).normalized()
+		var side: Vector3 = tangent.cross(cam_dir)
+		if side.length() < 0.001:
+			side = Vector3.RIGHT
+		else:
+			side = side.normalized()
+		trail_mesh.surface_set_color(Color(trail_color.r, trail_color.g, trail_color.b, alpha))
+		trail_mesh.surface_add_vertex(p + side * width * 0.5)
+		trail_mesh.surface_set_color(Color(trail_color.r, trail_color.g, trail_color.b, alpha))
+		trail_mesh.surface_add_vertex(p - side * width * 0.5)
+	trail_mesh.surface_end()
+
+# ---------------- 命中反馈回调 ----------------
+func _on_hit_landed(pos: Vector3, dmg: float, heavy: bool) -> void:
+	var m := get_parent()
+	if m and m.has_method("on_player_hit"):
+		m.call("on_player_hit", pos, dmg, heavy, current_attack.get("arc", "slash"))
 
 # ---------------- 相机 ----------------
 func _update_camera(delta: float) -> void:
@@ -878,7 +971,8 @@ func _update_camera(delta: float) -> void:
 		var full := camera_pivot.global_position.distance_to(desired_global)
 		var hit_d := camera_pivot.global_position.distance_to(hit.position)
 		factor = clampf((hit_d - 0.25) / maxf(full, 0.01), 0.3, 1.0)
-	camera.position = CAM_OFFSET * factor
+	camera.position = CAM_OFFSET * factor + shake_offset
+	shake_offset = shake_offset.lerp(Vector3.ZERO, 0.4)  # 震动衰减由主场景驱动，这里兜底归零
 
 	# 不入地
 	if camera.global_position.y < 0.45:
@@ -919,19 +1013,35 @@ func _update_move(delta: float) -> void:
 	else:
 		state = State.IDLE
 
-# ---------------- 全局输入（连招缓冲） ----------------
+# ---------------- 全局输入（连招缓冲 / 方向攻击 / 蓄力） ----------------
 func _handle_global_input() -> void:
+	# 蓄力中：持续累积，不处理其他攻击输入
+	if heavy_charging:
+		heavy_charge_time += get_physics_process_delta_time()
+		var new_level := 0
+		for i in range(C.CHARGE_LEVELS.size()):
+			if heavy_charge_time >= C.CHARGE_LEVELS[i]:
+				new_level = i + 1
+		if new_level != heavy_charge_level:
+			heavy_charge_level = new_level
+			_update_charge_visual()
+		if Input.is_action_just_released("heavy_attack"):
+			_release_heavy_charge()
+		elif Input.is_action_just_pressed("dodge"):
+			_cancel_heavy_charge()
+		return
+
 	var moves := _light_moves()
 	if Input.is_action_just_pressed("light_attack"):
 		if state == State.ATTACK:
-			combo_buffer = 0.4   # 400ms 内衔接
+			combo_buffer = 0.4
 		elif state in [State.IDLE, State.MOVE] and moves.size() > 0:
 			heavy_flag = false
-			_start_attack(_scaled_move(moves[combo_idx]))
-	elif Input.is_action_just_pressed("heavy_attack"):
+			var dir: String = _get_attack_direction()
+			_start_attack(_scaled_move(_pick_light_move(dir, moves)), dir)
+	elif Input.is_action_pressed("heavy_attack"):
 		if state in [State.IDLE, State.MOVE]:
-			heavy_flag = true
-			_start_attack(_scaled_move(_heavy_move()), true)
+			_start_heavy_charge()
 	elif Input.is_action_just_pressed("dodge") and stamina >= C.PLAYER_DODGE_COST:
 		var dir := Vector3.ZERO
 		var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
@@ -944,52 +1054,193 @@ func _handle_global_input() -> void:
 		if state in [State.IDLE, State.MOVE, State.ATTACK]:
 			_start_parry()
 
+## 根据当前移动输入判断攻击方向
+func _get_attack_direction() -> String:
+	var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
+	if input.length() < 0.3:
+		return "neutral"
+	var cam_basis := Basis(Vector3.UP, cam_yaw)
+	var move_dir := (cam_basis * Vector3(input.x, 0, input.y)).normalized()
+	var forward := -transform.basis.z
+	var angle := forward.signed_angle_to(move_dir, Vector3.UP)
+	if absf(angle) < PI * 0.25:
+		return "forward"
+	elif absf(angle) > PI * 0.75:
+		return "back"
+	else:
+		return "side"
+
+## 根据方向选择轻击招式
+func _pick_light_move(dir: String, moves: Array) -> Dictionary:
+	if dir == "neutral":
+		return moves[combo_idx]
+	var alt: Dictionary = current_style.get(dir, {})
+	if not alt.is_empty():
+		return alt
+	return moves[combo_idx]
+
+## 开始蓄力
+func _start_heavy_charge() -> void:
+	var heavy: Dictionary = current_style.get("heavy", {})
+	if stamina < float(heavy.get("stamina", 24.0)):
+		return
+	heavy_charging = true
+	heavy_charge_time = 0.0
+	heavy_charge_level = 0
+	state = State.ATTACK
+	attack_phase = "charging"
+	current_attack = {}
+	velocity.x = 0
+	velocity.z = 0
+	_update_charge_visual()
+	Sfx.play("swing")
+
+## 更新蓄力视觉（武器发光强度）
+func _update_charge_visual() -> void:
+	if not weapon_emissive:
+		return
+	var intensity: float = 0.5 + heavy_charge_level * 1.2
+	weapon_emissive.emission_energy_multiplier = intensity
+	if heavy_charge_level >= C.CHARGE_MAX_LEVEL:
+		weapon_emissive.emission = Color(1.0, 0.5, 0.15)
+	elif heavy_charge_level >= 2:
+		weapon_emissive.emission = Color(0.9, 0.55, 0.25)
+	else:
+		weapon_emissive.emission = Color(0.4, 0.5, 0.8)
+
+## 取消蓄力
+func _cancel_heavy_charge() -> void:
+	heavy_charging = false
+	heavy_charge_level = 0
+	heavy_charge_time = 0.0
+	if weapon_emissive:
+		weapon_emissive.emission_energy_multiplier = 0.5
+		weapon_emissive.emission = Color(0.15, 0.12, 0.08)
+	state = State.IDLE
+	attack_phase = ""
+
+## 释放蓄力重击
+func _release_heavy_charge() -> void:
+	var level: int = heavy_charge_level
+	heavy_charging = false
+	var heavy: Dictionary = current_style.get("heavy", {})
+	var charge_table: Array = current_style.get("charge", [])
+	var atk := _scaled_move(heavy)
+	if level > 0 and level <= charge_table.size():
+		var ch: Dictionary = charge_table[level - 1]
+		atk["dmg"] = float(atk["dmg"]) * float(ch.get("dmg_mult", 1.0))
+		atk["reach"] = float(atk.get("reach", 2.6)) * float(ch.get("reach_mult", 1.0))
+	atk["poise"] = float(atk["poise"]) * (1.0 + level * 0.3)
+	heavy_charge_level = 0
+	heavy_charge_time = 0.0
+	if weapon_emissive:
+		weapon_emissive.emission_energy_multiplier = 0.5
+		weapon_emissive.emission = Color(0.15, 0.12, 0.08)
+	heavy_flag = true
+	_start_attack(atk, "neutral", true, level)
+
 # ---------------- 攻击 ----------------
-func _start_attack(atk: Dictionary, heavy := false) -> void:
-	if stamina < atk.stamina:
+func _start_attack(atk: Dictionary, dir: String = "neutral", heavy: bool = false, charge_level: int = 0) -> void:
+	if stamina < float(atk.get("stamina", 8.0)):
 		return
 	heavy_flag = heavy
-	stamina -= atk.stamina
+	var stamina_cost: float = float(atk.get("stamina", 8.0))
+	stamina -= stamina_cost
 	Sfx.play("swing")
 	stamina_changed.emit(stamina, get_max_stamina())
 	stamina_timer = C.PLAYER_STAMINA_DELAY
 	state = State.ATTACK
 	current_attack = atk
 	attack_phase = "startup"
-	attack_timer = atk.startup
-	velocity.x = 0; velocity.z = 0
-	# 武器挥动动画
-	var from_deg := float(atk.get("from_deg", -80.0))
-	var to_deg := float(atk.get("to_deg", 70.0))
-	if anim_tween: anim_tween.kill()
+	attack_timer = float(atk.get("startup", 0.1))
+
+	# 蓄力等级影响 reach
+	var reach_val: float = float(atk.get("reach", 2.6))
+	_apply_reach(reach_val)
+
+	# 前进步伐与身体转向
+	current_attack_step = float(atk.get("step", 0.0))
+	current_attack_step_done = 0.0
+	current_attack_body_turn = float(atk.get("body_turn", 0.0))
+	current_attack_body_turn_done = 0.0
+
+	# 轨迹颜色
+	trail_color = atk.get("trail_color", Color(0.7, 0.85, 1.0))
+
+	# 多轴旋转：从 rot_from 挥到 rot_to
+	var rot_from: Vector3 = atk.get("rot_from", Vector3(-1.2, 0, 0))
+	var rot_to: Vector3 = atk.get("rot_to", Vector3(1.0, 0, 0))
+	var startup_t: float = float(atk.get("startup", 0.1))
+	var active_t: float = float(atk.get("active", 0.1))
+	var recovery_t: float = float(atk.get("recovery", 0.2))
+
+	# 蓄力 3 段时武器放大
+	if charge_level >= 3 and weapon_mesh:
+		weapon_mesh.scale = Vector3(1.5, 1.5, 1.5)
+
+	if anim_tween:
+		anim_tween.kill()
 	anim_tween = create_tween()
-	anim_tween.tween_property(weapon_pivot, "rotation:x", deg_to_rad(from_deg), atk.startup)
-	anim_tween.tween_callback(func(): weapon_pivot.rotation.x = deg_to_rad(from_deg))
-	anim_tween.tween_property(weapon_pivot, "rotation:x", deg_to_rad(to_deg), atk.active)
-	anim_tween.tween_callback(func(): hitbox.activate(atk.dmg, atk.poise, self, 6.0))
-	anim_tween.tween_interval(atk.active)
-	anim_tween.tween_callback(func(): hitbox.deactivate(); weapon_pivot.rotation.x = 0)
-	anim_tween.tween_property(weapon_pivot, "rotation:x", 0, atk.recovery)
+	# 起手：回到 rot_from
+	anim_tween.tween_property(weapon_pivot, "rotation", rot_from, startup_t)
+	# 命中阶段：rot_from → rot_to，激活 hitbox
+	anim_tween.tween_callback(func():
+		trail_active = true
+		hitbox.activate(float(atk["dmg"]), float(atk["poise"]), self, 6.0 + charge_level * 2.0, heavy))
+	)
+	anim_tween.tween_property(weapon_pivot, "rotation", rot_to, active_t)
+	anim_tween.tween_callback(func():
+		hitbox.deactivate()
+		trail_active = false
+	)
+	# 收招：rot_to → 0
+	anim_tween.tween_property(weapon_pivot, "rotation", Vector3.ZERO, recovery_t)
+	anim_tween.tween_callback(func():
+		if weapon_mesh:
+			weapon_mesh.scale = Vector3.ONE
+	)
 
 func _update_attack(delta: float) -> void:
+	if attack_phase == "charging":
+		# 蓄力状态由输入处理，这里保持静止
+		velocity.x = 0
+		velocity.z = 0
+		return
 	combo_buffer -= delta
 	attack_timer -= delta
+
+	# active 阶段：前进步伐 + 身体转向
+	if attack_phase == "active":
+		var active_total: float = float(current_attack.get("active", 0.1))
+		if active_total > 0.0:
+			var prog: float = 1.0 - clampf(attack_timer / active_total, 0.0, 1.0)
+			# 前进步伐（沿角色朝向 -Z）
+			var target_step: float = current_attack_step * prog
+			var step_diff: float = target_step - current_attack_step_done
+			current_attack_step_done = target_step
+			var fwd := -transform.basis.z
+			velocity.x = fwd.x * step_diff / delta
+			velocity.z = fwd.z * step_diff / delta
+			# 身体转向（绕 Y 轴）
+			body_pivot.rotation.y = current_attack_body_turn * prog
+
 	if attack_timer > 0:
 		return
 	match attack_phase:
 		"startup":
 			attack_phase = "active"
-			attack_timer = current_attack.active
+			attack_timer = float(current_attack.get("active", 0.1))
 		"active":
 			attack_phase = "recovery"
-			attack_timer = current_attack.recovery
+			attack_timer = float(current_attack.get("recovery", 0.2))
 		"recovery":
-			# 连招衔接
+			body_pivot.rotation.y = 0.0
 			var moves := _light_moves()
 			if not heavy_flag and combo_buffer > 0.0 and moves.size() > 0:
 				combo_idx = (combo_idx + 1) % moves.size()
 				combo_buffer = 0.0
-				_start_attack(_scaled_move(moves[combo_idx]))
+				var dir: String = _get_attack_direction()
+				_start_attack(_scaled_move(_pick_light_move(dir, moves)), dir)
 			else:
 				combo_idx = 0
 				combo_buffer = 0.0
@@ -1064,6 +1315,11 @@ func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0) ->
 	velocity.z = dir.z * kback
 	state = State.HURT
 	set_meta("hurt_timer", 0.25)
+	# 重置攻击残留姿态
+	body_pivot.rotation.y = 0.0
+	if anim_tween:
+		anim_tween.kill()
+	weapon_pivot.rotation = Vector3.ZERO
 	if hp <= 0:
 		state = State.DEAD
 		queue_free()  # 临时处理

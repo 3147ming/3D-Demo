@@ -87,3 +87,6 @@ parry={
 [rendering]
 
 environment/defaults/default_clear_color=Color(0.04, 0.045, 0.05, 1)
+anti_aliasing/quality/msaa_3d=2
+anti_aliasing/quality/use_debanding=true
+lights_and_shadows/filters/soft_shadow_quality=2

@@ -21,9 +21,21 @@ var rain: GPUParticles3D
 var weather := "mist"
 var difficulty := "normal"
 
+# 命中反馈
+var hit_stop_frames := 0
+var shake_intensity := 0.0
+var shake_duration := 0.0
+var shake_timer := 0.0
+var slowmo_timer := 0.0
+var slowmo_scale := 1.0
+var cam_original_pos: Vector3 = Vector3.ZERO
+var spark_scene: PackedScene = null
+var dust_scene: PackedScene = null
+
 func _ready() -> void:
 	_build_world()
 	_build_rain()
+	_build_ambient_particles()
 	_spawn_player()
 	_spawn_enemies()
 	_build_hud()
@@ -31,33 +43,68 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _build_world() -> void:
-	# 环境光与雾
+	# 环境光与雾（加强雾气营造氛围）
 	var env := WorldEnvironment.new()
 	world_env = env
 	env.environment = Environment.new()
 	env.environment.background_mode = Environment.BG_COLOR
-	env.environment.background_color = Color(0.05, 0.06, 0.08)
+	env.environment.background_color = Color(0.04, 0.045, 0.06)
 	env.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.environment.ambient_light_color = Color(0.18, 0.16, 0.22)
-	env.environment.ambient_light_energy = 1.0
+	env.environment.ambient_light_color = Color(0.22, 0.18, 0.28)
+	env.environment.ambient_light_energy = 1.1
 	env.environment.fog_enabled = true
-	env.environment.fog_light_color = Color(0.15, 0.12, 0.10)
-	env.environment.fog_density = 0.012
+	env.environment.fog_light_color = Color(0.12, 0.10, 0.14)
+	env.environment.fog_density = 0.018
+	env.environment.fog_height_enabled = true
+	env.environment.fog_height = 1.0
+	env.environment.fog_height_density = 0.5
+	# SSAO
+	env.environment.ssao_enabled = true
+	env.environment.ssao_radius = 1.2
+	env.environment.ssao_intensity = 2.0
+	env.environment.ssao_power = 1.5
+	# 辉光（武器发光/轨迹会有泛光）
+	env.environment.glow_enabled = true
+	env.environment.glow_intensity = 1.2
+	env.environment.glow_bloom = 0.6
+	env.environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
+	env.environment.glow_hdr_threshold = 0.8
+	env.environment.glow_hdr_scale = 2.0
+	env.environment.glow_levels = 7
+	# 色彩分级（暗部偏冷青，亮部偏暖橙）
+	env.environment.color_correction_enabled = true
+	env.environment.tonemap_mode = Environment.TONE_MAPPER_ACES
+	env.environment.adjustment_brightness = 1.0
+	env.environment.adjustment_contrast = 1.15
+	env.environment.adjustment_saturation = 1.1
+	env.environment.adjustment_enabled = true
 	add_child(env)
 
-	# 主光
+	# 主光（侧逆光，拉出轮廓）
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55, -30, 0)
-	sun.light_energy = 1.8
+	sun.rotation_degrees = Vector3(-52, -35, 12)
+	sun.light_energy = 2.2
+	sun.light_color = Color(0.95, 0.88, 0.78)
 	sun.shadow_enabled = true
+	sun.shadow_blur = 0.8
+	sun.shadow_penumbra = 2.0
 	add_child(sun)
 
-	# 补光
+	# 补光（冷色填充）
 	var fill := OmniLight3D.new()
-	fill.position = Vector3(0, 6, 0)
-	fill.light_energy = 0.5
-	fill.light_color = Color(0.6, 0.7, 1.0)
+	fill.position = Vector3(0, 6, 4)
+	fill.light_energy = 0.6
+	fill.light_color = Color(0.5, 0.6, 0.9)
+	fill.omni_range = 30.0
 	add_child(fill)
+
+	# 轮廓光（正后方暖色，强化角色边缘）
+	var rim := DirectionalLight3D.new()
+	rim.rotation_degrees = Vector3(-30, 145, 0)
+	rim.light_energy = 1.6
+	rim.light_color = Color(0.95, 0.65, 0.35)
+	rim.shadow_enabled = false
+	add_child(rim)
 
 	# 地面（青石板风格）
 	var ground := MeshInstance3D.new()
@@ -137,6 +184,10 @@ func _on_enemy_died(_pos: Vector3, e: Node) -> void:
 	Sfx.play("coin")
 	player.save_game()
 	respawn_timer = 7.0
+	# 击杀慢镜头
+	_trigger_slowmo(C.SLOWMO_KILL, C.SLOWMO_KILL_SCALE)
+	# 击杀大震动
+	_trigger_shake(C.SHAKE_BREAK, 0.4)
 
 # 进攻令牌：同一时间只允许一名敌人出手，其余走位包围
 func request_attack(e: Node) -> bool:
@@ -148,6 +199,110 @@ func request_attack(e: Node) -> bool:
 func release_attack(e: Node) -> void:
 	if active_attacker == e:
 		active_attacker = null
+
+# ---------------- 命中反馈 ----------------
+## 玩家命中敌人时由 player 回调
+func on_player_hit(pos: Vector3, dmg: float, heavy: bool, arc: String) -> void:
+	# 命中停顿
+	var frames: int = C.HIT_STOP_HEAVY if heavy else C.HIT_STOP_LIGHT
+	if dmg >= 30.0:
+		frames = C.HIT_STOP_BREAK
+	_trigger_hit_stop(frames)
+	# 屏幕震动
+	var shake: float = C.SHAKE_HEAVY if heavy else C.SHAKE_LIGHT
+	if dmg >= 30.0:
+		shake = C.SHAKE_BREAK
+	_trigger_shake(shake, 0.25)
+	# 粒子
+	_spawn_hit_vfx(pos, heavy)
+
+## 敌人命中玩家时由 enemy 回调
+func on_enemy_hit(pos: Vector3, dmg: float, heavy: bool) -> void:
+	_trigger_hit_stop(C.HIT_STOP_LIGHT)
+	_trigger_shake(C.SHAKE_HEAVY, 0.3)
+	_spawn_hit_vfx(pos, false)
+
+func _trigger_hit_stop(frames: int) -> void:
+	hit_stop_frames = maxi(hit_stop_frames, frames)
+	if hit_stop_frames > 0:
+		Engine.time_scale = 0.04
+
+func _trigger_shake(intensity: float, duration: float) -> void:
+	shake_intensity = maxf(shake_intensity, intensity)
+	shake_duration = maxf(shake_duration, duration)
+	shake_timer = shake_duration
+
+func _trigger_slowmo(duration: float, scale: float) -> void:
+	slowmo_timer = maxf(slowmo_timer, duration)
+	slowmo_scale = scale
+	# 若没有命中停顿在生效，立即进入慢镜头
+	if hit_stop_frames <= 0:
+		Engine.time_scale = scale
+
+## 命中粒子：火花 + 地面尘环
+func _spawn_hit_vfx(pos: Vector3, heavy: bool) -> void:
+	_spawn_sparks(pos, heavy)
+	_spawn_dust_ring(pos, heavy)
+
+func _spawn_sparks(pos: Vector3, heavy: bool) -> void:
+	var p := GPUParticles3D.new()
+	p.amount = 24 if heavy else 12
+	p.lifetime = 0.4
+	p.position = pos
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.15
+	pm.direction = Vector3(0, 1, 0)
+	pm.spread = 80.0
+	pm.initial_velocity_min = 3.0
+	pm.initial_velocity_max = 7.0
+	pm.gravity = Vector3(0, -12, 0)
+	pm.damping_min = 2.0
+	pm.damping_max = 4.0
+	p.process_material = pm
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.06, 0.06)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1.0, 0.85, 0.4)
+	mat.emissive_enabled = true
+	mat.emission = Color(1.0, 0.7, 0.2)
+	quad.material = mat
+	p.draw_pass_1 = quad
+	p.one_shot = true
+	p.emitting = true
+	add_child(p)
+	# 自动回收
+	p.finished.connect(p.queue_free)
+
+func _spawn_dust_ring(pos: Vector3, heavy: bool) -> void:
+	var p := GPUParticles3D.new()
+	p.amount = 16 if heavy else 8
+	p.lifetime = 0.5
+	p.position = pos
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.1
+	pm.direction = Vector3(0, 0.3, 0)
+	pm.spread = 180.0
+	pm.initial_velocity_min = 1.5
+	pm.initial_velocity_max = 3.0
+	pm.gravity = Vector3(0, -4, 0)
+	pm.damping_min = 1.5
+	pm.damping_max = 2.5
+	p.process_material = pm
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.25, 0.25)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.8, 0.75, 0.65, 0.6)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	quad.material = mat
+	p.draw_pass_1 = quad
+	p.one_shot = true
+	p.emitting = true
+	add_child(p)
+	p.finished.connect(p.queue_free)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and player:
@@ -193,9 +348,39 @@ func cycle_weather() -> void:
 			e.fog_light_color = Color(0.10, 0.12, 0.16)
 			e.ambient_light_energy = 0.8
 		else:
-			e.fog_density = 0.012
-			e.fog_light_color = Color(0.15, 0.12, 0.10)
-			e.ambient_light_energy = 1.0
+			e.fog_density = 0.018
+			e.fog_light_color = Color(0.12, 0.10, 0.14)
+			e.ambient_light_energy = 1.1
+
+## 环境浮尘/余烬粒子（跟随玩家飘动）
+func _build_ambient_particles() -> void:
+	var p := GPUParticles3D.new()
+	p.amount = 60
+	p.lifetime = 4.0
+	p.visibility_aabb = AABB(Vector3(-20, 0, -20), Vector3(40, 12, 40))
+	p.process_material = ParticleProcessMaterial.new()
+	var pm: ParticleProcessMaterial = p.process_material
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(12, 5, 12)
+	pm.direction = Vector3(0, 0.3, 0)
+	pm.spread = 30.0
+	pm.initial_velocity_min = 0.1
+	pm.initial_velocity_max = 0.4
+	pm.gravity = Vector3(0, -0.1, 0)
+	pm.damping_min = 0.1
+	pm.damping_max = 0.3
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.08, 0.08)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.95, 0.82, 0.55, 0.5)
+	mat.emissive_enabled = true
+	mat.emission = Color(0.8, 0.6, 0.3)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	quad.material = mat
+	p.draw_pass_1 = quad
+	p.emitting = true
+	add_child(p)
 
 func toggle_difficulty() -> void:
 	difficulty = "hard" if difficulty == "normal" else "normal"
@@ -214,6 +399,32 @@ func _build_ui() -> void:
 	player.ui = ui
 
 func _process(_delta: float) -> void:
+	# ---- 命中反馈 ----
+	# hit-stop 帧计数（注意：time_scale 低时 _process 仍按真实帧调用）
+	if hit_stop_frames > 0:
+		hit_stop_frames -= 1
+		if hit_stop_frames <= 0:
+			Engine.time_scale = slowmo_scale
+	# 慢镜头倒计时
+	if slowmo_timer > 0:
+		slowmo_timer -= _delta
+		if slowmo_timer <= 0:
+			slowmo_scale = 1.0
+			if hit_stop_frames <= 0:
+				Engine.time_scale = 1.0
+	# 屏幕震动
+	if shake_timer > 0 and player and "shake_offset" in player:
+		shake_timer -= _delta
+		var t: float = clampf(shake_timer / maxf(shake_duration, 0.01), 0.0, 1.0)
+		player.shake_offset = Vector3(
+			randf_range(-1.0, 1.0),
+			randf_range(-1.0, 1.0),
+			randf_range(-1.0, 1.0)
+		) * shake_intensity * t
+		if shake_timer <= 0:
+			shake_intensity = 0.0
+			player.shake_offset = Vector3.ZERO
+
 	if money_label and player:
 		money_label.text = "铜钱 %d" % player.money
 	if buff_label and player:

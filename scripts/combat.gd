@@ -44,6 +44,24 @@ const PARRY_WINDOW := 0.30
 const PARRY_COST := 0.0
 const PARRY_COUNTER_POISE := 60.0
 
+# ---------- 蓄力重击 ----------
+const CHARGE_LEVELS := [0.4, 0.8, 1.2]   # 达到各段蓄力所需秒数
+const CHARGE_MAX_LEVEL := 3
+
+# ---------- 命中反馈 ----------
+const HIT_STOP_LIGHT := 2       # 轻击命中停顿帧数
+const HIT_STOP_HEAVY := 5       # 重击命中停顿帧数
+const HIT_STOP_BREAK := 8       # 架势崩坏停顿帧数
+const SHAKE_LIGHT := 0.08       # 轻击屏幕震动幅度
+const SHAKE_HEAVY := 0.22       # 重击屏幕震动幅度
+const SHAKE_BREAK := 0.45       # 架势崩坏震动幅度
+const SLOWMO_KILL := 0.15       # 击杀慢镜头时长（秒）
+const SLOWMO_KILL_SCALE := 0.25 # 慢镜头时间流速
+
+# ---------- 武器拖尾 ----------
+const TRAIL_MAX_POINTS := 18
+const TRAIL_WIDTH := 0.12
+
 # ---------- 敌人属性 ----------
 const ENEMY_MAX_HP := 120.0
 const ENEMY_MAX_POISE := 80.0

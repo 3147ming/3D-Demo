@@ -80,6 +80,12 @@ func _build_self() -> void:
 	hitbox.add_child(hs)
 	hitbox.position = Vector3(0, 1.2, -1.4)   # look_at 的 -Z 为前方
 	arm.add_child(hitbox)
+	hitbox.hit_landed.connect(_on_hit_landed)
+
+func _on_hit_landed(pos: Vector3, dmg: float, heavy: bool) -> void:
+	var m := get_parent()
+	if m and m.has_method("on_enemy_hit"):
+		m.call("on_enemy_hit", pos, dmg, heavy)
 
 func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
