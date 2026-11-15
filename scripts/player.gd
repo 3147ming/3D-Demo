@@ -98,22 +98,24 @@ func _build_self() -> void:
 	staff.material_override = smat
 	weapon_pivot.add_child(staff)
 
-	# 攻击判定盒
+	# 攻击判定盒（look_at 使 -Z 为前方，判定盒必须放在 -Z 侧）
 	hitbox = Hitbox.new()
 	var hs := CollisionShape3D.new()
 	hs.shape = BoxShape3D.new()
-	hs.shape.size = Vector3(1.0, 1.2, 2.6)
+	hs.shape.size = Vector3(1.2, 1.4, 2.2)
 	hitbox.add_child(hs)
-	hitbox.position = Vector3(0, 1.2, 1.4)
+	hitbox.position = Vector3(0, 1.2, -1.5)
 	weapon_pivot.add_child(hitbox)
 
-	# 相机
+	# 相机（放置在 +Z 侧，相机自身看向 -Z，正好面向角色）
 	camera_pivot = Node3D.new()
 	camera_pivot.position = Vector3(0, 1.6, 0)
+	camera_pivot.top_level = true   # 不与角色旋转耦合，避免角色转身带动镜头
 	add_child(camera_pivot)
+	camera_pivot.global_position = global_position + Vector3(0, 1.6, 0)
 	camera = Camera3D.new()
-	camera.position = Vector3(0, 0.6, -6.0)
-	camera.fov = 65.0
+	camera.position = Vector3(0, 0.6, 6.0)
+	camera.fov = 68.0
 	camera.current = true
 	camera_pivot.add_child(camera)
 
@@ -123,6 +125,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		pitch = clamp(pitch - event.relative.y * 0.003, -0.6, 1.0)
 		camera_pivot.rotation.y = yaw
 		camera_pivot.rotation.x = pitch
+	elif event is InputEventMouseButton and event.pressed:
+		# 点击画面重新捕获鼠标
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -156,6 +161,10 @@ func _physics_process(delta: float) -> void:
 
 	_update_lock(delta)
 	move_and_slide()
+
+	# 相机跟随（camera_pivot 为 top_level，需手动同步位置）
+	if camera_pivot:
+		camera_pivot.global_position = global_position + Vector3(0, 1.6, 0)
 
 # ---------------- 移动 ----------------
 func _update_move(delta: float) -> void:

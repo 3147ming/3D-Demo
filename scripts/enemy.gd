@@ -66,9 +66,9 @@ func _build_self() -> void:
 	hitbox = Hitbox.new()
 	var hs := CollisionShape3D.new()
 	hs.shape = BoxShape3D.new()
-	hs.shape.size = Vector3(1.2, 1.6, 2.8)
+	hs.shape.size = Vector3(1.2, 1.6, 2.4)
 	hitbox.add_child(hs)
-	hitbox.position = Vector3(0, 1.2, 1.6)
+	hitbox.position = Vector3(0, 1.2, -1.4)   # look_at 的 -Z 为前方
 	arm.add_child(hitbox)
 
 func _physics_process(delta: float) -> void:

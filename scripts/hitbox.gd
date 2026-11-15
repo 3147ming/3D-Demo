@@ -26,7 +26,17 @@ func activate(dmg: float, poi: float, attacker: Node, kback: float = 6.0) -> voi
 func deactivate() -> void:
 	monitoring = false
 
+func _physics_process(_delta: float) -> void:
+	if not monitoring:
+		return
+	# 兜底轮询：monitoring 由 false 切 true 时，已在范围内的目标可能不发 body_entered
+	for body in get_overlapping_bodies():
+		_apply_hit(body)
+
 func _on_body_entered(body: Node) -> void:
+	_apply_hit(body)
+
+func _apply_hit(body: Node) -> void:
 	if owner_node and body == owner_node:
 		return
 	if _hit.has(body):
