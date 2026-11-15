@@ -61,19 +61,30 @@ func _build_world() -> void:
 	gbody.add_child(gcol)
 	add_child(gbody)
 
-	# 几个装饰柱
+	# 几个装饰柱（带碰撞，供镜头遮挡检测）
 	for i in range(6):
+		var a := 6.28 * i / 6.0
+		var pos := Vector3(cos(a) * 8, 2.0, sin(a) * 8)
+
 		var p := MeshInstance3D.new()
 		p.mesh = CylinderMesh.new()
 		p.mesh.top_radius = 0.5
 		p.mesh.bottom_radius = 0.6
 		p.mesh.height = 4.0
-		var a := 6.28 * i / 6.0
-		p.position = Vector3(cos(a) * 8, 2.0, sin(a) * 8)
+		p.position = pos
 		var pm := StandardMaterial3D.new()
 		pm.albedo_color = Color(0.30, 0.28, 0.26)
 		p.material_override = pm
 		add_child(p)
+
+		var col := CollisionShape3D.new()
+		col.shape = CylinderShape3D.new()
+		col.shape.radius = 0.6
+		col.shape.height = 4.0
+		col.position = pos
+		var body := StaticBody3D.new()
+		body.add_child(col)
+		add_child(body)
 
 func _spawn_player() -> void:
 	player = CharacterBody3D.new()
@@ -144,7 +155,7 @@ func _build_hud() -> void:
 
 	# 操作提示
 	var hint := Label.new()
-	hint.text = "WASD 移动 · 空格 跳跃 · J 轻击 · K 重击 · L 闪避 · C 识破 · Q 锁定 · ESC 释放鼠标"
+	hint.text = "WASD 移动 · 空格 跳跃 · 左键/J 轻击 · 右键/K 重击 · L 闪避 · C 识破 · Q 锁定 · ESC 释放鼠标"
 	hint.position = Vector2(20, 660)
 	hint.add_theme_color_override("font_color", Color(0.8, 0.8, 0.7, 0.8))
 	canvas.add_child(hint)

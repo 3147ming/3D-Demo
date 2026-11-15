@@ -33,9 +33,17 @@ var parry_timer := 0.0
 # 相机
 var camera_pivot: Node3D
 var camera: Camera3D
-var yaw := 0.0
-var pitch := 0.2
+var yaw := 0.0            # 目标 yaw（鼠标/锁定写入）
+var pitch := 0.15         # 目标 pitch
+var cam_yaw := 0.0        # 平滑后的实际 yaw
+var cam_pitch := 0.15
 var lock_target: Node3D = null
+var lock_marker: MeshInstance3D
+
+# 近景越肩机位（相对 pivot：右偏、略高、身后）
+const CAM_OFFSET := Vector3(0.55, 0.72, 3.4)
+const CAM_FOLLOW_K := 14.0    # 位置平滑系数
+const CAM_ROTATE_K := 18.0    # 朝向平滑系数
 
 # 节点引用
 var body_mesh: MeshInstance3D
@@ -114,20 +122,36 @@ func _build_self() -> void:
 	add_child(camera_pivot)
 	camera_pivot.global_position = global_position + Vector3(0, 1.6, 0)
 	camera = Camera3D.new()
-	camera.position = Vector3(0, 0.6, 6.0)
-	camera.fov = 68.0
+	camera.position = CAM_OFFSET
+	camera.fov = 70.0
 	camera.current = true
 	camera_pivot.add_child(camera)
+
+	# 锁定标记：面向相机的小圆环
+	lock_marker = MeshInstance3D.new()
+	var torus := TorusMesh.new()
+	torus.inner_radius = 0.30
+	torus.outer_radius = 0.40
+	torus.rings = 24
+	torus.ring_segments = 8
+	lock_marker.mesh = torus
+	var mmat := StandardMaterial3D.new()
+	mmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mmat.albedo_color = Color(0.85, 0.70, 0.35)
+	mmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mmat.no_depth_test = true
+	lock_marker.material_override = mmat
+	lock_marker.visible = false
+	add_child(lock_marker)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		yaw -= event.relative.x * 0.003
-		pitch = clamp(pitch - event.relative.y * 0.003, -0.6, 1.0)
-		camera_pivot.rotation.y = yaw
-		camera_pivot.rotation.x = pitch
+		pitch = clamp(pitch - event.relative.y * 0.003, -0.5, 0.35)
 	elif event is InputEventMouseButton and event.pressed:
-		# 点击画面重新捕获鼠标
-		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		# 仅在鼠标可见时点击才重捕获；已捕获时左右键留给攻击 action
+		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -162,15 +186,71 @@ func _physics_process(delta: float) -> void:
 	_update_lock(delta)
 	move_and_slide()
 
-	# 相机跟随（camera_pivot 为 top_level，需手动同步位置）
-	if camera_pivot:
-		camera_pivot.global_position = global_position + Vector3(0, 1.6, 0)
+	_update_camera(delta)
+	_update_marker()
+
+# ---------------- 相机 ----------------
+func _update_camera(delta: float) -> void:
+	if not camera_pivot or not camera:
+		return
+
+	# 位置平滑跟随（camera_pivot 为 top_level，需手动同步）
+	var anchor := global_position + Vector3(0, 1.6, 0)
+	camera_pivot.global_position = camera_pivot.global_position.lerp(
+		anchor, 1.0 - exp(-CAM_FOLLOW_K * delta))
+
+	# 锁定时：yaw 自动转向"玩家背后看向敌人"的方位
+	if lock_target and is_instance_valid(lock_target):
+		var d := global_position - lock_target.global_position
+		d.y = 0.0
+		if d.length() > 0.05:
+			yaw = atan2(d.x, d.z)
+			pitch = lerp(pitch, 0.10, 1.0 - exp(-6.0 * delta))
+
+	# 朝向平滑（最短角插值，避免翻转）
+	var k := 1.0 - exp(-CAM_ROTATE_K * delta)
+	cam_yaw = lerp_angle(cam_yaw, yaw, k)
+	cam_pitch = lerp(cam_pitch, pitch, k)
+	camera_pivot.rotation.y = cam_yaw
+	camera_pivot.rotation.x = cam_pitch
+
+	# 遮挡：从 pivot 向机位射线，命中则拉近
+	var desired_global: Vector3 = camera_pivot.global_transform * CAM_OFFSET
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(
+		camera_pivot.global_position, desired_global, 1)
+	q.exclude.append(get_rid())
+	var hit := space.intersect_ray(q)
+	var factor := 1.0
+	if hit:
+		var full := camera_pivot.global_position.distance_to(desired_global)
+		var hit_d := camera_pivot.global_position.distance_to(hit.position)
+		factor = clampf((hit_d - 0.25) / maxf(full, 0.01), 0.3, 1.0)
+	camera.position = CAM_OFFSET * factor
+
+	# 不入地
+	if camera.global_position.y < 0.45:
+		var p := camera.global_position
+		p.y = 0.45
+		camera.global_position = p
+
+func _update_marker() -> void:
+	if not lock_marker:
+		return
+	if lock_target and is_instance_valid(lock_target) and lock_target.is_inside_tree():
+		lock_marker.visible = true
+		lock_marker.global_position = lock_target.global_position + Vector3(0, 2.3, 0)
+	else:
+		lock_marker.visible = false
+		if lock_target and not is_instance_valid(lock_target):
+			lock_target = null
 
 # ---------------- 移动 ----------------
 func _update_move(delta: float) -> void:
 	var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
-	var cam_basis := Basis(Vector3.UP, yaw)
-	var move_dir := (cam_basis * Vector3(input.x, 0, -input.y)).normalized()
+	var cam_basis := Basis(Vector3.UP, cam_yaw)
+	# 相机前方为 -Z：W(input.y=-1) 应得到 z=-1，故直接用 input.y
+	var move_dir := (cam_basis * Vector3(input.x, 0, input.y)).normalized()
 
 	var speed := C.PLAYER_SPEED
 	velocity.x = move_dir.x * speed
@@ -201,8 +281,8 @@ func _handle_global_input() -> void:
 	elif Input.is_action_just_pressed("dodge") and stamina >= C.PLAYER_DODGE_COST:
 		var dir := Vector3.ZERO
 		var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
-		var cam_basis := Basis(Vector3.UP, yaw)
-		dir = (cam_basis * Vector3(input.x, 0, -input.y)).normalized()
+		var cam_basis := Basis(Vector3.UP, cam_yaw)
+		dir = (cam_basis * Vector3(input.x, 0, input.y)).normalized()
 		if dir.length() < 0.1:
 			dir = -transform.basis.z
 		_start_dodge(dir)
