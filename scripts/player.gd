@@ -4,7 +4,6 @@ class_name Player
 
 signal hp_changed(value: float, maxv: float)
 signal stamina_changed(value: float, maxv: float)
-signal posture_broken()
 
 const C = preload("res://scripts/combat.gd")
 
@@ -294,7 +293,7 @@ func _update_hurt(delta: float) -> void:
 	else:
 		state = State.IDLE
 
-func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> void:
+func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0) -> void:
 	if state == State.DEAD:
 		return
 	if is_invincible():
@@ -315,7 +314,7 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> 
 		queue_free()  # 临时处理
 
 # ---------------- 锁定 ----------------
-func _update_lock(delta: float) -> void:
+func _update_lock(_delta: float) -> void:
 	if Input.is_action_just_pressed("lock_on"):
 		if lock_target:
 			lock_target = null

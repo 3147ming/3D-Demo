@@ -96,13 +96,13 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= 18.0 * delta
 	move_and_slide()
 
-func _update_idle(delta: float) -> void:
+func _update_idle(_delta: float) -> void:
 	if target and is_instance_valid(target):
 		var d := global_position.distance_to(target.global_position)
 		if d < 14.0:
 			state = State.CHASE
 
-func _update_chase(delta: float) -> void:
+func _update_chase(_delta: float) -> void:
 	if not target or not is_instance_valid(target):
 		state = State.IDLE
 		return

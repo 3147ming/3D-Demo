@@ -15,11 +15,11 @@ func _ready() -> void:
 	collision_mask = 1       # 检测第 1 层的角色身体
 	body_entered.connect(_on_body_entered)
 
-func activate(dmg: float, poi: float, owner: Node, kback: float = 6.0) -> void:
+func activate(dmg: float, poi: float, attacker: Node, kback: float = 6.0) -> void:
 	damage = dmg
 	poise_damage = poi
 	knockback = kback
-	owner_node = owner
+	owner_node = attacker
 	_hit.clear()
 	monitoring = true
 
