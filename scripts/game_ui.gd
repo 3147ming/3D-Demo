@@ -263,7 +263,7 @@ func _build_keys() -> void:
 	for b in BINDABLE:
 		var action := String(b["action"])
 		var label := String(b["label"])
-		var key_text := "按下新键…" if awaiting_action == action else player.key_label(action)
+		var key_text: String = "按下新键…" if awaiting_action == action else String(player.key_label(action))
 		_add_row(label, "点击右侧按钮后按下新按键（Esc 取消）", key_text, true,
 			func(): awaiting_action = action; refresh())
 	_add_note("键位保存于 user://inkblade_keybinds.json，重启后仍然有效；鼠标左右键攻击不受影响。")
