@@ -5,7 +5,13 @@ const PlayerScript = preload("res://scripts/player.gd")
 const EnemyScript = preload("res://scripts/enemy.gd")
 
 var player: CharacterBody3D
-var enemy: CharacterBody3D
+var enemies: Array = []
+var hud_enemy: Node = null
+var active_attacker: Node = null
+var respawn_timer := 0.0
+var ehp_bar: ColorRect
+var epoise_bar: ColorRect
+var ehp_label: Label
 var ui: CanvasLayer
 var money_label: Label
 var buff_label: Label
@@ -19,7 +25,7 @@ func _ready() -> void:
 	_build_world()
 	_build_rain()
 	_spawn_player()
-	_spawn_enemy()
+	_spawn_enemies()
 	_build_hud()
 	_build_ui()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -103,18 +109,45 @@ func _spawn_player() -> void:
 	player.position = Vector3(0, 0, 4)
 	add_child(player)
 
-func _spawn_enemy() -> void:
-	enemy = CharacterBody3D.new()
-	enemy.set_script(EnemyScript)
-	enemy.position = Vector3(0, 0, -4)
-	add_child(enemy)
-	enemy.died.connect(_on_enemy_died)
+func _spawn_enemies() -> void:
+	var spawns := [Vector3(0, 0, -4), Vector3(-3.6, 0, -6.6), Vector3(3.6, 0, -6.6)]
+	for p in spawns:
+		_spawn_enemy(p)
 
-func _on_enemy_died(_pos: Vector3) -> void:
+func _spawn_enemy(pos: Vector3) -> void:
+	var e := CharacterBody3D.new()
+	e.set_script(EnemyScript)
+	e.position = pos
+	add_child(e)
+	e.speed_mult = 1.2 if difficulty == "hard" else 1.0
+	e.dmg_mult = 1.15 if difficulty == "hard" else 1.0
+	e.feint_chance = 0.40 if difficulty == "hard" else 0.25
+	e.died.connect(_on_enemy_died.bind(e))
+	enemies.append(e)
+	if hud_enemy == null:
+		hud_enemy = e
+
+func _on_enemy_died(_pos: Vector3, e: Node) -> void:
+	enemies.erase(e)
+	if hud_enemy == e:
+		hud_enemy = null
 	var drops := ["herb", "bloodsand", "bone", "ghostfire"]
 	player.add_item(drops[randi() % drops.size()], 1)
 	player.money += 15
+	Sfx.play("coin")
 	player.save_game()
+	respawn_timer = 7.0
+
+# 进攻令牌：同一时间只允许一名敌人出手，其余走位包围
+func request_attack(e: Node) -> bool:
+	if active_attacker == null or not is_instance_valid(active_attacker):
+		active_attacker = e
+		return true
+	return active_attacker == e
+
+func release_attack(e: Node) -> void:
+	if active_attacker == e:
+		active_attacker = null
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and player:
@@ -199,6 +232,35 @@ func _process(_delta: float) -> void:
 			"雨" if weather == "rain" else "雾",
 			"困难" if difficulty == "hard" else "普通"]
 
+	# 敌人血条跟随当前目标
+	if hud_enemy == null or not is_instance_valid(hud_enemy):
+		_pick_hud_enemy()
+	if hud_enemy and is_instance_valid(hud_enemy):
+		var hp_max: float = hud_enemy.hp_max
+		var poise_max: float = hud_enemy.poise_max
+		if ehp_bar:
+			ehp_bar.size.x = 296.0 * clampf(hud_enemy.hp / hp_max, 0.0, 1.0)
+		if epoise_bar:
+			epoise_bar.size.x = 296.0 * clampf(hud_enemy.poise / poise_max, 0.0, 1.0)
+
+	# 敌人补充
+	if respawn_timer > 0.0:
+		respawn_timer -= _delta
+		if respawn_timer <= 0.0 and enemies.size() < 3:
+			var a := randf() * TAU
+			_spawn_enemy(Vector3(cos(a) * 8.0, 0.0, sin(a) * 8.0 - 2.0))
+
+func _pick_hud_enemy() -> void:
+	var best: Node = null
+	var best_d := 1e9
+	for e in enemies:
+		if is_instance_valid(e):
+			var d: float = player.global_position.distance_to(e.global_position)
+			if d < best_d:
+				best_d = d
+				best = e
+	hud_enemy = best
+
 func _build_hud() -> void:
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
@@ -243,23 +305,21 @@ func _build_hud() -> void:
 	ehp.size = Vector2(300, 56)
 	ehp.position = Vector2(490, 20)
 	canvas.add_child(ehp)
-	var ehp_bar := ColorRect.new()
+	ehp_bar = ColorRect.new()
 	ehp_bar.color = Color(0.72, 0.22, 0.20)
 	ehp_bar.size = Vector2(296, 18)
 	ehp_bar.position = Vector2(2, 2)
 	ehp.add_child(ehp_bar)
-	var epoise_bar := ColorRect.new()
+	epoise_bar = ColorRect.new()
 	epoise_bar.color = Color(0.85, 0.70, 0.30)
 	epoise_bar.size = Vector2(296, 10)
 	epoise_bar.position = Vector2(2, 24)
 	ehp.add_child(epoise_bar)
-	var ehp_label := Label.new()
+	ehp_label = Label.new()
 	ehp_label.text = "烬门护法"
 	ehp_label.position = Vector2(6, 36)
 	ehp_label.add_theme_color_override("font_color", Color(0.9, 0.85, 0.75))
 	ehp.add_child(ehp_label)
-	enemy.hp_changed.connect(func(v, m): ehp_bar.size.x = 296.0 * (v / m))
-	enemy.posture_changed.connect(func(v, m): epoise_bar.size.x = 296.0 * (v / m))
 
 	# 操作提示
 	var hint := Label.new()

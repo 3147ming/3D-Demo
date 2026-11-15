@@ -421,6 +421,7 @@ func use_item(id: String) -> bool:
 		_:
 			return false
 	bag[id] = count_item(id) - 1
+	Sfx.play("coin")
 	_refresh_ui()
 	return true
 
@@ -587,6 +588,7 @@ func _spell_ready(key: String, def: Dictionary) -> bool:
 	chi_timer = C.PLAYER_CHI_DELAY
 	spell_cd[key] = float(def["cd"])
 	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
+	Sfx.play("spell")
 	return true
 
 func cast_freeze() -> bool:
@@ -617,6 +619,7 @@ func try_transform() -> void:
 	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
 	transformed = true
 	transform_timer = C.TRANSFORM_DURATION
+	Sfx.play("transform")
 	if body_pivot:
 		body_pivot.scale = Vector3(1.15, 1.15, 1.15)
 	if body_material:
@@ -947,6 +950,7 @@ func _start_attack(atk: Dictionary, heavy := false) -> void:
 		return
 	heavy_flag = heavy
 	stamina -= atk.stamina
+	Sfx.play("swing")
 	stamina_changed.emit(stamina, get_max_stamina())
 	stamina_timer = C.PLAYER_STAMINA_DELAY
 	state = State.ATTACK
@@ -999,6 +1003,7 @@ func _start_dodge(dir: Vector3) -> void:
 	dodge_dir = dir.normalized()
 	dodge_timer = C.PLAYER_DODGE_DURATION
 	stamina -= C.PLAYER_DODGE_COST
+	Sfx.play("dodge")
 	stamina_changed.emit(stamina, get_max_stamina())
 	stamina_timer = C.PLAYER_STAMINA_DELAY
 	look_at(global_position + dodge_dir, Vector3.UP)
@@ -1019,6 +1024,7 @@ func is_invincible() -> bool:
 func _start_parry() -> void:
 	state = State.PARRY
 	parry_timer = C.PARRY_WINDOW
+	Sfx.play("parry")
 
 func _update_parry(delta: float) -> void:
 	parry_timer -= delta
@@ -1052,6 +1058,7 @@ func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0) ->
 		actual *= 0.5
 	hp = maxf(hp - actual, 0.0)
 	hp_changed.emit(hp, get_max_hp())
+	Sfx.play("hurt")
 	var dir := (global_position - from_pos).normalized()
 	velocity.x = dir.x * kback
 	velocity.z = dir.z * kback

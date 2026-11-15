@@ -13,13 +13,18 @@ enum State { IDLE, CHASE, ATTACK, HURT, BROKEN, DEAD }
 var state := State.IDLE
 
 var hp: float = C.ENEMY_MAX_HP
+var hp_max: float = C.ENEMY_MAX_HP
 var poise: float = C.ENEMY_MAX_POISE
+var poise_max: float = C.ENEMY_MAX_POISE
 var attack_timer := 0.0
 var attack_phase := ""   # startup / active / recovery
 var hurt_timer := 0.0
 var freeze_timer := 0.0
 var speed_mult := 1.0
 var dmg_mult := 1.0
+var feint_chance := 0.25
+var orbit_dir := 1.0
+var attack_cooldown := 0.0
 var broken_timer := 0.0
 var target: Node3D = null
 
@@ -33,6 +38,7 @@ func _ready() -> void:
 	add_to_group("enemy")
 	add_to_group("hurtbox")
 	target = get_tree().get_first_node_in_group("player")
+	orbit_dir = 1.0 if randf() < 0.5 else -1.0
 
 func _build_self() -> void:
 	var col := CollisionShape3D.new()
@@ -119,33 +125,77 @@ func _update_idle(_delta: float) -> void:
 		if d < 14.0:
 			state = State.CHASE
 
-func _update_chase(_delta: float) -> void:
+func _update_chase(delta: float) -> void:
 	if not target or not is_instance_valid(target):
 		state = State.IDLE
 		return
+	attack_cooldown = maxf(0.0, attack_cooldown - delta)
+
 	var dir := (target.global_position - global_position)
 	dir.y = 0
 	var dist := dir.length()
-	look_at(global_position + dir.normalized(), Vector3.UP)
-	if dist > C.ENEMY_ATTACK_RANGE:
-		var mv := dir.normalized() * C.ENEMY_SPEED * speed_mult
+	var dir_n := dir.normalized()
+	look_at(global_position + dir_n, Vector3.UP)
+
+	var allowed := _request_token()
+
+	if dist > C.ENEMY_ATTACK_RANGE or not allowed:
+		var mv: Vector3
+		if dist > C.ENEMY_ATTACK_RANGE * 1.8 or allowed:
+			# 直接逼近
+			mv = dir_n * C.ENEMY_SPEED * speed_mult
+		else:
+			# 无进攻令牌：围绕玩家侧移，保持包围
+			var side := Vector3(-dir_n.z, 0.0, dir_n.x) * orbit_dir
+			var err := clampf(dist - C.ENEMY_ATTACK_RANGE * 1.5, -1.5, 1.5)
+			mv = (side + dir_n * err) * C.ENEMY_SPEED * 0.7 * speed_mult
 		velocity.x = mv.x
 		velocity.z = mv.z
 	else:
-		velocity.x = 0; velocity.z = 0
-		_start_attack()
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if attack_cooldown <= 0.0:
+			_start_attack()
+
+func _request_token() -> bool:
+	var m := get_parent()
+	if m and m.has_method("request_attack"):
+		return bool(m.request_attack(self))
+	return true
+
+func _release_token() -> void:
+	var m := get_parent()
+	if m and m.has_method("release_attack"):
+		m.release_attack(self)
 
 func _start_attack() -> void:
 	state = State.ATTACK
-	attack_phase = "startup"
-	attack_timer = 0.5
-	velocity.x = 0; velocity.z = 0
+	velocity.x = 0.0
+	velocity.z = 0.0
+	# 佯攻：虚晃一枪后撤，逼迫玩家提前闪避
+	if randf() < feint_chance:
+		attack_phase = "feint"
+		attack_timer = 0.22
+	else:
+		attack_phase = "startup"
+		attack_timer = 0.5
 
 func _update_attack(delta: float) -> void:
 	attack_timer -= delta
 	if attack_timer > 0:
 		return
 	match attack_phase:
+		"feint":
+			# 后撤半步
+			if target and is_instance_valid(target):
+				var away := global_position - target.global_position
+				away.y = 0.0
+				away = away.normalized()
+				velocity.x = away.x * C.ENEMY_SPEED * 1.6
+				velocity.z = away.z * C.ENEMY_SPEED * 1.6
+			attack_cooldown = 1.0
+			_release_token()
+			state = State.CHASE
 		"startup":
 			attack_phase = "active"
 			attack_timer = 0.15
@@ -155,6 +205,8 @@ func _update_attack(delta: float) -> void:
 			attack_phase = "recovery"
 			attack_timer = 0.7
 		"recovery":
+			attack_cooldown = 0.9
+			_release_token()
 			state = State.CHASE
 
 func _update_hurt(delta: float) -> void:
@@ -180,10 +232,12 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> 
 			dmg *= 2.0
 	hp -= dmg
 	hp_changed.emit(hp, C.ENEMY_MAX_HP)
+	Sfx.play("hit")
 	var dir := (global_position - from_pos).normalized()
 	velocity.x = dir.x * kback
 	velocity.z = dir.z * kback
 	if state != State.BROKEN:
+		_release_token()
 		poise -= poi
 		posture_changed.emit(poise, C.ENEMY_MAX_POISE)
 		if poise <= 0:
@@ -196,5 +250,7 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> 
 	if hp <= 0:
 		hp = 0
 		state = State.DEAD
+		_release_token()
+		Sfx.play("death")
 		died.emit(global_position)
 		queue_free()
