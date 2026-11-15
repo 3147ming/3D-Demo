@@ -64,9 +64,11 @@ var weapon_mesh: MeshInstance3D
 var hitbox: Hitbox
 var anim_tween: Tween
 
-# 武器 / 武学
+# 武器 / 武学 / 装备
 var current_weapon: Dictionary = {}
 var current_style: Dictionary = {}
+var equipment := {"weapon": "", "armor": "", "head": "", "accessory": ""}
+var inventory: Array = []
 
 func _ready() -> void:
 	_build_self()
@@ -74,7 +76,13 @@ func _ready() -> void:
 	collision_mask = 1 | (1 << 2)
 	add_to_group("player")
 	add_to_group("hurtbox")
+	for key in EquipDB.ITEMS:
+		inventory.append(key)
 	equip_style(StyleDB.DEFAULT_ID)
+	hp = get_max_hp()
+	stamina = get_max_stamina()
+	hp_changed.emit(hp, get_max_hp())
+	stamina_changed.emit(stamina, get_max_stamina())
 
 func _build_self() -> void:
 	# 胶囊碰撞
@@ -282,7 +290,74 @@ func _apply_reach(reach: float) -> void:
 func equip_style(id: String) -> void:
 	current_style = StyleDB.get_style(id)
 	combo_idx = 0
-	equip_weapon(String(current_style.get("weapon_id", WeaponDB.DEFAULT_ID)))
+	equipment["weapon"] = String(current_style.get("weapon_id", WeaponDB.DEFAULT_ID))
+	equip_weapon(equipment["weapon"])
+
+# ---------------- 属性汇总层（基础值 + 装备加成） ----------------
+func get_base(attr: String) -> float:
+	match attr:
+		"max_hp": return C.PLAYER_MAX_HP
+		"max_stamina": return C.PLAYER_MAX_STAMINA
+		"attack": return 0.0
+		"defense": return 0.0
+		"poise_regen": return 0.0
+		"move_speed": return C.PLAYER_SPEED
+		"stamina_regen": return C.PLAYER_STAMINA_REGEN
+	return 0.0
+
+func get_equip_bonus(attr: String) -> float:
+	var total := 0.0
+	for slot in equipment:
+		if slot == "weapon":
+			continue
+		var id: String = equipment[slot]
+		if id == "":
+			continue
+		var item := EquipDB.get_item(id)
+		if item.is_empty():
+			continue
+		var stats: Dictionary = item.get("stats", {})
+		total += float(stats.get(attr, 0.0))
+	return total
+
+func get_stat(attr: String) -> float:
+	return get_base(attr) + get_equip_bonus(attr)
+
+func get_max_hp() -> float: return get_stat("max_hp")
+func get_max_stamina() -> float: return get_stat("max_stamina")
+func get_attack() -> float: return get_stat("attack")
+func get_defense() -> float: return get_stat("defense")
+func get_move_speed() -> float: return get_stat("move_speed")
+func get_stamina_regen() -> float: return get_stat("stamina_regen") + get_stat("poise_regen")
+
+func equip_item(slot: String, id: String) -> bool:
+	if not EquipDB.SLOTS.has(slot) or slot == "weapon":
+		return false
+	if id != "":
+		if not inventory.has(id):
+			return false
+		if String(EquipDB.get_item(id).get("slot", "")) != slot:
+			return false
+
+	var old_hp_max := get_max_hp()
+	var old_st_max := get_max_stamina()
+	equipment[slot] = id
+	var new_hp_max := get_max_hp()
+	var new_st_max := get_max_stamina()
+
+	# 上限变化：提升补值、降低钳制
+	if new_hp_max > old_hp_max:
+		hp += new_hp_max - old_hp_max
+	hp = minf(hp, new_hp_max)
+	if new_st_max > old_st_max:
+		stamina += new_st_max - old_st_max
+	stamina = minf(stamina, new_st_max)
+	hp_changed.emit(hp, new_hp_max)
+	stamina_changed.emit(stamina, new_st_max)
+	return true
+
+func unequip_slot(slot: String) -> void:
+	equip_item(slot, "")
 
 func _scaled_move(base: Dictionary) -> Dictionary:
 	var m := base.duplicate()
@@ -291,7 +366,7 @@ func _scaled_move(base: Dictionary) -> Dictionary:
 	m["startup"] = float(base.get("startup", 0.1)) * sp
 	m["active"] = float(base.get("active", 0.1)) * sp
 	m["recovery"] = float(base.get("recovery", 0.2)) * sp
-	m["dmg"] = float(base.get("dmg", 10.0)) * float(w.get("damage_mult", 1.0))
+	m["dmg"] = (float(base.get("dmg", 10.0)) + get_attack()) * float(w.get("damage_mult", 1.0))
 	m["poise"] = float(base.get("poise", 10.0)) * float(w.get("poise_mult", 1.0))
 	m["stamina"] = float(base.get("stamina", 8.0)) * float(w.get("stamina_mult", 1.0))
 	if w.has("reach"):
@@ -321,6 +396,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			equip_style("staff_style")
 		elif event.keycode == KEY_2:
 			equip_style("saber_style")
+		elif event.keycode == KEY_3:
+			equip_item("armor", "cloth_robe")
+		elif event.keycode == KEY_4:
+			equip_item("armor", "leather_armor")
+		elif event.keycode == KEY_5:
+			equip_item("head", "headband")
+		elif event.keycode == KEY_6:
+			equip_item("accessory", "ink_jade")
+		elif event.keycode == KEY_0:
+			unequip_slot("armor")
+			unequip_slot("head")
+			unequip_slot("accessory")
 
 func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
@@ -344,8 +431,8 @@ func _physics_process(delta: float) -> void:
 	# 体力回复
 	stamina_timer -= delta
 	if stamina_timer <= 0.0 and state != State.ATTACK:
-		stamina = min(stamina + C.PLAYER_STAMINA_REGEN * delta, C.PLAYER_MAX_STAMINA)
-		stamina_changed.emit(stamina, C.PLAYER_MAX_STAMINA)
+		stamina = min(stamina + get_stamina_regen() * delta, get_max_stamina())
+		stamina_changed.emit(stamina, get_max_stamina())
 
 	_update_lock(delta)
 	move_and_slide()
@@ -469,7 +556,7 @@ func _update_move(delta: float) -> void:
 	# 相机前方为 -Z：W(input.y=-1) 应得到 z=-1，故直接用 input.y
 	var move_dir := (cam_basis * Vector3(input.x, 0, input.y)).normalized()
 
-	var speed := C.PLAYER_SPEED
+	var speed := get_move_speed()
 	velocity.x = move_dir.x * speed
 	velocity.z = move_dir.z * speed
 	if not is_on_floor():
@@ -514,7 +601,7 @@ func _start_attack(atk: Dictionary, heavy := false) -> void:
 		return
 	heavy_flag = heavy
 	stamina -= atk.stamina
-	stamina_changed.emit(stamina, C.PLAYER_MAX_STAMINA)
+	stamina_changed.emit(stamina, get_max_stamina())
 	stamina_timer = C.PLAYER_STAMINA_DELAY
 	state = State.ATTACK
 	current_attack = atk
@@ -566,7 +653,7 @@ func _start_dodge(dir: Vector3) -> void:
 	dodge_dir = dir.normalized()
 	dodge_timer = C.PLAYER_DODGE_DURATION
 	stamina -= C.PLAYER_DODGE_COST
-	stamina_changed.emit(stamina, C.PLAYER_MAX_STAMINA)
+	stamina_changed.emit(stamina, get_max_stamina())
 	stamina_timer = C.PLAYER_STAMINA_DELAY
 	look_at(global_position + dodge_dir, Vector3.UP)
 
@@ -611,15 +698,16 @@ func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0) ->
 	if is_parrying():
 		# 识破成功：反弹架势伤害给攻击者（此处简单处理）
 		return
-	hp -= dmg
-	hp_changed.emit(hp, C.PLAYER_MAX_HP)
+	# 防御减伤，至少造成 1 点
+	var actual := maxf(1.0, dmg - get_defense())
+	hp = maxf(hp - actual, 0.0)
+	hp_changed.emit(hp, get_max_hp())
 	var dir := (global_position - from_pos).normalized()
 	velocity.x = dir.x * kback
 	velocity.z = dir.z * kback
 	state = State.HURT
 	set_meta("hurt_timer", 0.25)
 	if hp <= 0:
-		hp = 0
 		state = State.DEAD
 		queue_free()  # 临时处理
 
