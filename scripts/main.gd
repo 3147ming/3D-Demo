@@ -53,39 +53,40 @@ func _build_world() -> void:
 	env.environment.background_mode = Environment.BG_COLOR
 	env.environment.background_color = Color(0.04, 0.045, 0.06)
 	env.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.environment.ambient_light_color = Color(0.22, 0.18, 0.28)
-	env.environment.ambient_light_energy = 1.1
+	env.environment.ambient_light_color = Color(0.16, 0.14, 0.20)
+	env.environment.ambient_light_energy = 0.5
 	env.environment.fog_enabled = true
-	env.environment.fog_light_color = Color(0.12, 0.10, 0.14)
+	env.environment.fog_light_color = Color(0.09, 0.08, 0.11)
 	env.environment.fog_density = 0.018
 	env.environment.fog_height = 1.0
 	env.environment.fog_height_density = 0.5
 	# SSAO
 	env.environment.ssao_enabled = true
 	env.environment.ssao_radius = 1.2
-	env.environment.ssao_intensity = 2.0
+	env.environment.ssao_intensity = 1.5
 	env.environment.ssao_power = 1.5
-	# 辉光（武器发光/轨迹会有泛光）
+	# 辉光：只保留 1-4 级、阈值高于 1，避免整屏溢光
 	env.environment.glow_enabled = true
-	env.environment.glow_intensity = 1.2
-	env.environment.glow_bloom = 0.6
+	env.environment.glow_intensity = 0.3
+	env.environment.glow_bloom = 0.0
 	env.environment.glow_blend_mode = Environment.GLOW_BLEND_MODE_SCREEN
-	env.environment.glow_hdr_threshold = 0.8
-	env.environment.glow_hdr_scale = 2.0
+	env.environment.glow_hdr_threshold = 1.25
+	env.environment.glow_hdr_scale = 1.0
 	for i in range(1, 8):
-		env.environment.set("glow_levels/" + str(i), true)
+		env.environment.set("glow_levels/" + str(i), i <= 4)
 	# 色彩分级（暗部偏冷青，亮部偏暖橙）
 	env.environment.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.environment.adjustment_brightness = 1.0
-	env.environment.adjustment_contrast = 1.15
-	env.environment.adjustment_saturation = 1.1
+	env.environment.tonemap_exposure = 0.85
+	env.environment.adjustment_brightness = 0.85
+	env.environment.adjustment_contrast = 1.08
+	env.environment.adjustment_saturation = 1.02
 	env.environment.adjustment_enabled = true
 	add_child(env)
 
 	# 主光（侧逆光，拉出轮廓）
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-52, -35, 12)
-	sun.light_energy = 2.2
+	sun.light_energy = 1.25
 	sun.light_color = Color(0.95, 0.88, 0.78)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 0.8
@@ -94,7 +95,7 @@ func _build_world() -> void:
 	# 补光（冷色填充）
 	var fill := OmniLight3D.new()
 	fill.position = Vector3(0, 6, 4)
-	fill.light_energy = 0.6
+	fill.light_energy = 0.28
 	fill.light_color = Color(0.5, 0.6, 0.9)
 	fill.omni_range = 30.0
 	add_child(fill)
@@ -102,7 +103,7 @@ func _build_world() -> void:
 	# 轮廓光（正后方暖色，强化角色边缘）
 	var rim := DirectionalLight3D.new()
 	rim.rotation_degrees = Vector3(-30, 145, 0)
-	rim.light_energy = 1.6
+	rim.light_energy = 0.55
 	rim.light_color = Color(0.95, 0.65, 0.35)
 	rim.shadow_enabled = false
 	add_child(rim)
@@ -374,7 +375,7 @@ func _build_ambient_particles() -> void:
 	quad.size = Vector2(0.08, 0.08)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.95, 0.82, 0.55, 0.5)
+	mat.albedo_color = Color(0.95, 0.82, 0.55, 0.2)
 	mat.emissive_enabled = true
 	mat.emission = Color(0.8, 0.6, 0.3)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA

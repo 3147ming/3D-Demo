@@ -274,7 +274,7 @@ func _build_self() -> void:
 	tmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	tmat.emissive_enabled = true
 	tmat.emission = Color(0.6, 0.8, 1.0)
-	tmat.emission_energy_multiplier = 2.0
+	tmat.emission_energy_multiplier = 0.9
 	trail_mi.material_override = tmat
 	add_child(trail_mi)
 
@@ -355,7 +355,7 @@ func _build_weapon_mesh(w: Dictionary) -> MeshInstance3D:
 	weapon_emissive.metallic = 0.6 if spec.get("shape", "cylinder") == "box" else 0.2
 	weapon_emissive.emissive_enabled = true
 	weapon_emissive.emission = Color(0.15, 0.12, 0.08)
-	weapon_emissive.emission_energy_multiplier = 0.5
+	weapon_emissive.emission_energy_multiplier = 0.3
 
 	var mi := MeshInstance3D.new()
 	match spec.get("shape", "cylinder"):
@@ -1222,7 +1222,7 @@ func _start_heavy_charge() -> void:
 func _update_charge_visual() -> void:
 	if not weapon_emissive:
 		return
-	var intensity: float = 0.5 + heavy_charge_level * 1.2
+	var intensity: float = 0.3 + heavy_charge_level * 0.55
 	weapon_emissive.emission_energy_multiplier = intensity
 	if heavy_charge_level >= C.CHARGE_MAX_LEVEL:
 		weapon_emissive.emission = Color(1.0, 0.5, 0.15)
@@ -1237,7 +1237,7 @@ func _cancel_heavy_charge() -> void:
 	heavy_charge_level = 0
 	heavy_charge_time = 0.0
 	if weapon_emissive:
-		weapon_emissive.emission_energy_multiplier = 0.5
+		weapon_emissive.emission_energy_multiplier = 0.3
 		weapon_emissive.emission = Color(0.15, 0.12, 0.08)
 	state = State.IDLE
 	attack_phase = ""
@@ -1257,7 +1257,7 @@ func _release_heavy_charge() -> void:
 	heavy_charge_level = 0
 	heavy_charge_time = 0.0
 	if weapon_emissive:
-		weapon_emissive.emission_energy_multiplier = 0.5
+		weapon_emissive.emission_energy_multiplier = 0.3
 		weapon_emissive.emission = Color(0.15, 0.12, 0.08)
 	heavy_flag = true
 	_start_attack(atk, "neutral", true, level)
