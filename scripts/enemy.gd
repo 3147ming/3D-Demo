@@ -21,7 +21,7 @@ const ANIM_HINTS := {
 	"run": ["run", "walk", "jog", "move"],
 	"attack": ["attack", "slash", "swing", "combo", "punch"],
 	"hurt": ["hurt", "hit", "damage", "impact"],
-	"block": ["block", "guard", "blocking", "parry"],
+	"block": ["blocking", "block", "guard", "parry"],
 	"death": ["death", "die", "dead"],
 }
 const LOOP_WORDS := ["idle", "walk", "run", "blocking", "spellcasting", "aiming"]
@@ -58,6 +58,8 @@ var block_chance := 0.35
 var last_seen_attack_count := 0
 # 连招
 var combo_left := 0
+# 动画锁定：播放 Block_Hit 等一次性动画时，暂时不让 _sync_anim 覆盖
+var anim_lock := 0.0
 
 var body_mesh: MeshInstance3D
 var weapon_arm: Node3D
@@ -145,6 +147,7 @@ func _on_hit_landed(pos: Vector3, dmg: float, heavy: bool) -> void:
 
 func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
+		_sync_anim()
 		return
 
 	# 定身：完全停止行动
@@ -159,6 +162,8 @@ func _physics_process(delta: float) -> void:
 		return
 
 	# 格挡计时
+	if anim_lock > 0.0:
+		anim_lock = maxf(0.0, anim_lock - delta)
 	if block_cooldown > 0.0:
 		block_cooldown = maxf(0.0, block_cooldown - delta)
 	if blocking:
@@ -194,6 +199,8 @@ func apply_freeze(seconds: float) -> void:
 # ---------------- GLB 动画驱动 ----------------
 func _sync_anim() -> void:
 	if anim_player == null:
+		return
+	if anim_lock > 0.0:
 		return
 	var moving := Vector2(velocity.x, velocity.z).length() > 0.3
 	var want := ""
@@ -339,6 +346,11 @@ func _on_blocked(poi: float, attacker: Node) -> void:
 	block_cooldown = 1.4
 	if weapon_arm:
 		weapon_arm.rotation = Vector3.ZERO
+	# 格挡受击动画（Block_Hit），短暂锁定避免被移动动画覆盖
+	if anim_player != null and anim_player.has_animation("Block_Hit"):
+		current_anim = "Block_Hit"
+		anim_player.play("Block_Hit", 0.05, 1.0)
+		anim_lock = 0.32
 	sfx.play("parry")
 	poise -= poi * 0.45
 	posture_changed.emit(poise, C.ENEMY_MAX_POISE)
@@ -445,6 +457,15 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0, att
 		hp = 0
 		state = State.DEAD
 		_release_token()
+		hitbox.deactivate()
+		anim_lock = 0.0
+		current_anim = ""
 		sfx.play("death")
 		died.emit(global_position)
-		queue_free()
+		# 留一段时间播放死亡动画再移除（原来立即 queue_free，根本看不到死亡动作）
+		collision_layer = 0
+		collision_mask = 0
+		velocity = Vector3.ZERO
+		var tw := create_tween()
+		tw.tween_interval(1.4)
+		tw.tween_callback(queue_free)
