@@ -125,7 +125,7 @@ func _process(_delta: float) -> void:
 		if player.buff_guard > 0.0:
 			parts.append("金刚 %.0fs" % player.buff_guard)
 		var wid := String(player.current_weapon.get("id", ""))
-		var lv := player.forge_level(wid)
+		var lv: int = player.forge_level(wid)
 		if lv > 0:
 			parts.append("锻造 +%d" % lv)
 		buff_label.text = "　".join(parts)

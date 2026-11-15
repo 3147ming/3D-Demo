@@ -148,7 +148,7 @@ func _build_bag() -> void:
 	hint_label.text = "点击条目使用丹药 / 装备防具 · Tab 关闭"
 
 func _build_bag_row(id: String, def: Dictionary) -> void:
-	var n := player.count_item(id)
+	var n: int = player.count_item(id)
 	var type := String(def.get("type", ""))
 	var title := "%s  ×%d" % [def.get("name", id), n]
 	var desc := String(def.get("desc", ""))
@@ -181,10 +181,10 @@ func _build_shop() -> void:
 	for r in ItemDB.RECIPES:
 		var out := ItemDB.get_item(String(r["out"]))
 		var cost_parts: Array = []
-		var can := player.money >= int(r["money"])
+		var can: bool = player.money >= int(r["money"])
 		for k in r["cost"]:
 			var need := int(r["cost"][k])
-			var have := player.count_item(k)
+			var have: int = player.count_item(k)
 			if have < need:
 				can = false
 			cost_parts.append("%s %d/%d" % [ItemDB.get_item(k).get("name", k), have, need])
@@ -202,9 +202,9 @@ func _build_shop() -> void:
 func _build_forge() -> void:
 	var wid := String(player.current_weapon.get("id", "staff"))
 	var wname := String(player.current_weapon.get("name", "武器"))
-	var lv := player.forge_level(wid)
-	var cost := player.forge_cost()
-	var can := player.can_forge()
+	var lv: int = player.forge_level(wid)
+	var cost: Dictionary = player.forge_cost()
+	var can: bool = player.can_forge()
 	_add_row(
 		"%s  +%d" % [wname, lv],
 		"当前伤害倍率 ×%.2f　下一级需 青灵草 %d · 兽骨 %d · 铜钱 %d" % [
