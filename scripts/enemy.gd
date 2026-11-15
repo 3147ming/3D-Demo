@@ -15,7 +15,7 @@ const GlbLoader = preload("res://scripts/glb_loader.gd")
 # ---- 模型接入：把文件放到 assets/models/ 下即可自动生效 ----
 const VISUAL_PATH := "res://assets/models/enemy.glb"
 const VISUAL_HEIGHT := 2.0
-const VISUAL_YAW := 0.0      # 模型背对镜头时改成 PI
+const VISUAL_YAW := PI       # Kenney 模型朝 +Z，Godot look_at 朝 -Z，需转 180°
 const ANIM_HINTS := {
 	"idle": ["idle", "stand", "breath"],
 	"run": ["run", "walk", "jog", "move"],
