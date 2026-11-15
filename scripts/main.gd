@@ -3,22 +3,42 @@ extends Node3D
 
 const PlayerScript = preload("res://scripts/player.gd")
 const EnemyScript = preload("res://scripts/enemy.gd")
+const CombatFXScript = preload("res://scripts/combat_fx.gd")
 const C = preload("res://scripts/combat.gd")
+
+const UI_INK := Color(0.025, 0.030, 0.034, 0.92)
+const UI_INK_SOFT := Color(0.045, 0.052, 0.055, 0.86)
+const UI_GOLD := Color(0.86, 0.66, 0.30)
+const UI_GOLD_DIM := Color(0.43, 0.34, 0.19)
+const UI_TEXT := Color(0.91, 0.88, 0.78)
+const UI_DIM := Color(0.57, 0.58, 0.54)
+const UI_TEAL := Color(0.30, 0.65, 0.59)
+const UI_RED := Color(0.65, 0.20, 0.16)
 
 @onready var sfx: Node = get_node("/root/Sfx")
 
 var player: CharacterBody3D
+var combat_fx: Node3D
 var enemies: Array = []
 var hud_enemy: Node = null
 var active_attacker: Node = null
 var respawn_timer := 0.0
-var ehp_bar: ColorRect
-var epoise_bar: ColorRect
-var ehp_label: Label
 var ui: CanvasLayer
 var money_label: Label
 var buff_label: Label
 var status_label: Label
+var player_hp_bar: ProgressBar
+var player_stamina_bar: ProgressBar
+var player_chi_bar: ProgressBar
+var player_hp_value: Label
+var player_stamina_value: Label
+var player_chi_value: Label
+var target_panel: PanelContainer
+var target_name_label: Label
+var target_hp_bar: ProgressBar
+var target_posture_bar: ProgressBar
+var target_state_label: Label
+var skill_slots: Dictionary = {}
 var world_env: WorldEnvironment
 var rain: GPUParticles3D
 var weather := "mist"
@@ -46,6 +66,7 @@ func _ready() -> void:
 	_build_vfx_pool()
 	_build_props()
 	_spawn_player()
+	_build_combat_fx()
 	_spawn_enemies()
 	_build_hud()
 	_build_ui()
@@ -57,15 +78,15 @@ func _build_world() -> void:
 	world_env = env
 	env.environment = Environment.new()
 	env.environment.background_mode = Environment.BG_COLOR
-	env.environment.background_color = Color(0.04, 0.045, 0.06)
+	env.environment.background_color = Color(0.06, 0.065, 0.085)
 	env.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.environment.ambient_light_color = Color(0.16, 0.14, 0.20)
-	env.environment.ambient_light_energy = 0.5
+	env.environment.ambient_light_color = Color(0.26, 0.24, 0.32)
+	env.environment.ambient_light_energy = 1.0
 	env.environment.fog_enabled = true
-	env.environment.fog_light_color = Color(0.09, 0.08, 0.11)
-	env.environment.fog_density = 0.018
+	env.environment.fog_light_color = Color(0.18, 0.17, 0.22)
+	env.environment.fog_density = 0.01
 	env.environment.fog_height = 1.0
-	env.environment.fog_height_density = 0.5
+	env.environment.fog_height_density = 0.12
 	# SSAO
 	env.environment.ssao_enabled = true
 	env.environment.ssao_radius = 1.2
@@ -82,8 +103,8 @@ func _build_world() -> void:
 		env.environment.set("glow_levels/" + str(i), i <= 4)
 	# 色彩分级（暗部偏冷青，亮部偏暖橙）
 	env.environment.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.environment.tonemap_exposure = 0.85
-	env.environment.adjustment_brightness = 0.85
+	env.environment.tonemap_exposure = 1.0
+	env.environment.adjustment_brightness = 0.95
 	env.environment.adjustment_contrast = 1.08
 	env.environment.adjustment_saturation = 1.02
 	env.environment.adjustment_enabled = true
@@ -92,7 +113,7 @@ func _build_world() -> void:
 	# 主光（侧逆光，拉出轮廓）
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-52, -35, 12)
-	sun.light_energy = 1.25
+	sun.light_energy = 1.9
 	sun.light_color = Color(0.95, 0.88, 0.78)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 0.8
@@ -101,7 +122,7 @@ func _build_world() -> void:
 	# 补光（冷色填充）
 	var fill := OmniLight3D.new()
 	fill.position = Vector3(0, 6, 4)
-	fill.light_energy = 0.28
+	fill.light_energy = 0.5
 	fill.light_color = Color(0.5, 0.6, 0.9)
 	fill.omni_range = 30.0
 	add_child(fill)
@@ -109,7 +130,7 @@ func _build_world() -> void:
 	# 轮廓光（正后方暖色，强化角色边缘）
 	var rim := DirectionalLight3D.new()
 	rim.rotation_degrees = Vector3(-30, 145, 0)
-	rim.light_energy = 0.55
+	rim.light_energy = 0.9
 	rim.light_color = Color(0.95, 0.65, 0.35)
 	rim.shadow_enabled = false
 	add_child(rim)
@@ -119,7 +140,7 @@ func _build_world() -> void:
 	ground.mesh = PlaneMesh.new()
 	ground.mesh.size = Vector2(60, 60)
 	var gmat := StandardMaterial3D.new()
-	gmat.albedo_color = Color(0.18, 0.17, 0.20)
+	gmat.albedo_color = Color(0.27, 0.26, 0.30)
 	# 程序化噪声：让地面有不规则的石质明暗与粗糙度变化
 	var gnoise := FastNoiseLite.new()
 	gnoise.frequency = 0.05
@@ -176,6 +197,12 @@ func _spawn_player() -> void:
 	player.position = Vector3(0, 0, 4)
 	add_child(player)
 
+func _build_combat_fx() -> void:
+	combat_fx = Node3D.new()
+	combat_fx.set_script(CombatFXScript)
+	add_child(combat_fx)
+	combat_fx.setup(self, player)
+
 func _spawn_enemies() -> void:
 	var spawns := [Vector3(0, 0, -4), Vector3(-3.6, 0, -6.6), Vector3(3.6, 0, -6.6)]
 	for p in spawns:
@@ -191,6 +218,7 @@ func _spawn_enemy(pos: Vector3) -> void:
 	e.feint_chance = 0.40 if difficulty == "hard" else 0.25
 	e.block_chance = 0.55 if difficulty == "hard" else 0.35
 	e.died.connect(_on_enemy_died.bind(e))
+	e.posture_broken_signal.connect(Callable(combat_fx, "on_posture_broken").bind(e))
 	enemies.append(e)
 	if hud_enemy == null:
 		hud_enemy = e
@@ -277,7 +305,7 @@ func _build_vfx_pool() -> void:
 	var spark_mat := StandardMaterial3D.new()
 	spark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	spark_mat.albedo_color = Color(1.0, 0.85, 0.4)
-	spark_mat.emissive_enabled = true
+	spark_mat.emission_enabled = true
 	spark_mat.emission = Color(1.0, 0.7, 0.2)
 	var spark_quad := QuadMesh.new()
 	spark_quad.size = Vector2(0.06, 0.06)
@@ -350,7 +378,7 @@ func _notification(what: int) -> void:
 ## 环形分布的残碑石墩，打破大片空地的空旷感（带碰撞，绕行有空间感）
 func _build_props() -> void:
 	var stone_mat := StandardMaterial3D.new()
-	stone_mat.albedo_color = Color(0.15, 0.15, 0.17)
+	stone_mat.albedo_color = Color(0.21, 0.21, 0.24)
 	stone_mat.roughness = 0.9
 	for i in 10:
 		var a := TAU * float(i) / 10.0 + 0.35
@@ -438,7 +466,7 @@ func _build_ambient_particles() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = Color(0.95, 0.82, 0.55, 0.2)
-	mat.emissive_enabled = true
+	mat.emission_enabled = true
 	mat.emission = Color(0.8, 0.6, 0.3)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	quad.material = mat
@@ -490,7 +518,7 @@ func _process(_delta: float) -> void:
 			player.shake_offset = Vector3.ZERO
 
 	if money_label and player:
-		money_label.text = "铜钱 %d" % player.money
+		money_label.text = "铜钱  %d" % player.money
 	if buff_label and player:
 		var parts: Array = []
 		if player.buff_speed > 0.0:
@@ -501,22 +529,14 @@ func _process(_delta: float) -> void:
 		var lv: int = player.forge_level(wid)
 		if lv > 0:
 			parts.append("锻造 +%d" % lv)
-		buff_label.text = "　".join(parts)
+		buff_label.text = "　".join(parts) if not parts.is_empty() else " "
 	if status_label:
-		status_label.text = "天气 %s · 难度 %s（N / M 切换）" % [
+		status_label.text = "%s · %s　N 天气 / M 难度" % [
 			"雨" if weather == "rain" else "雾",
 			"困难" if difficulty == "hard" else "普通"]
 
-	# 敌人血条跟随当前目标
-	if hud_enemy == null or not is_instance_valid(hud_enemy):
-		_pick_hud_enemy()
-	if hud_enemy and is_instance_valid(hud_enemy):
-		var hp_max: float = hud_enemy.hp_max
-		var poise_max: float = hud_enemy.poise_max
-		if ehp_bar:
-			ehp_bar.size.x = 296.0 * clampf(hud_enemy.hp / hp_max, 0.0, 1.0)
-		if epoise_bar:
-			epoise_bar.size.x = 296.0 * clampf(hud_enemy.poise / poise_max, 0.0, 1.0)
+	_update_target_hud()
+	_update_skill_hud()
 
 	# 敌人补充
 	if respawn_timer > 0.0:
@@ -525,99 +545,306 @@ func _process(_delta: float) -> void:
 			var a := randf() * TAU
 			_spawn_enemy(Vector3(cos(a) * 8.0, 0.0, sin(a) * 8.0 - 2.0))
 
+func _hud_panel_style(active: bool = false) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = UI_INK_SOFT if active else UI_INK
+	style.border_color = UI_GOLD if active else UI_GOLD_DIM
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(3)
+	style.content_margin_left = 10.0
+	style.content_margin_top = 8.0
+	style.content_margin_right = 10.0
+	style.content_margin_bottom = 8.0
+	return style
+
+func _hud_label(parent: Control, text: String, font_size: int = 13,
+		color: Color = UI_TEXT, alignment: int = HORIZONTAL_ALIGNMENT_LEFT) -> Label:
+	var label := Label.new()
+	label.text = text
+	label.horizontal_alignment = alignment
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	parent.add_child(label)
+	return label
+
+func _hud_bar(parent: Control, color: Color, height: float) -> ProgressBar:
+	var bar := ProgressBar.new()
+	bar.custom_minimum_size.y = height
+	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar.show_percentage = false
+	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar.max_value = 100.0
+	bar.value = 100.0
+	var back := StyleBoxFlat.new()
+	back.bg_color = Color(0.08, 0.09, 0.09, 0.95)
+	back.set_corner_radius_all(2)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = color
+	fill.set_corner_radius_all(2)
+	bar.add_theme_stylebox_override("background", back)
+	bar.add_theme_stylebox_override("fill", fill)
+	parent.add_child(bar)
+	return bar
+
+func _build_hud() -> void:
+	var canvas := CanvasLayer.new()
+	canvas.layer = 10
+	add_child(canvas)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(root)
+
+	# 左上：玩家状态。
+	var player_panel := PanelContainer.new()
+	player_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_panel.offset_left = 20.0
+	player_panel.offset_top = 20.0
+	player_panel.offset_right = 312.0
+	player_panel.offset_bottom = 142.0
+	player_panel.add_theme_stylebox_override("panel", _hud_panel_style())
+	root.add_child(player_panel)
+	var player_rows := VBoxContainer.new()
+	player_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_rows.add_theme_constant_override("separation", 4)
+	player_panel.add_child(player_rows)
+	_hud_label(player_rows, "行  者", 13, UI_GOLD)
+	player_hp_bar = _hud_bar(player_rows, UI_RED, 22.0)
+	player_hp_value = _hud_label(player_hp_bar, "", 12, UI_TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	player_hp_value.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	player_hp_value.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
+	var stamina_row := HBoxContainer.new()
+	stamina_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_rows.add_child(stamina_row)
+	var stamina_title := _hud_label(stamina_row, "体力", 11, UI_DIM)
+	stamina_title.custom_minimum_size.x = 34.0
+	player_stamina_bar = _hud_bar(stamina_row, Color(0.61, 0.66, 0.62), 7.0)
+	player_stamina_value = _hud_label(stamina_row, "", 11, UI_DIM, HORIZONTAL_ALIGNMENT_RIGHT)
+	player_stamina_value.custom_minimum_size.x = 66.0
+
+	var chi_row := HBoxContainer.new()
+	chi_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_rows.add_child(chi_row)
+	var chi_title := _hud_label(chi_row, "内力", 11, UI_DIM)
+	chi_title.custom_minimum_size.x = 34.0
+	player_chi_bar = _hud_bar(chi_row, UI_TEAL, 7.0)
+	player_chi_value = _hud_label(chi_row, "", 11, UI_DIM, HORIZONTAL_ALIGNMENT_RIGHT)
+	player_chi_value.custom_minimum_size.x = 66.0
+
+	# 顶部中央：当前目标与金色架势条。
+	target_panel = PanelContainer.new()
+	target_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	target_panel.anchor_left = 0.5
+	target_panel.anchor_right = 0.5
+	target_panel.offset_left = -200.0
+	target_panel.offset_top = 20.0
+	target_panel.offset_right = 200.0
+	target_panel.offset_bottom = 112.0
+	target_panel.add_theme_stylebox_override("panel", _hud_panel_style())
+	root.add_child(target_panel)
+	var target_rows := VBoxContainer.new()
+	target_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	target_rows.add_theme_constant_override("separation", 4)
+	target_panel.add_child(target_rows)
+	target_name_label = _hud_label(target_rows, "", 14, UI_TEXT, HORIZONTAL_ALIGNMENT_CENTER)
+	target_hp_bar = _hud_bar(target_rows, UI_RED, 13.0)
+	target_posture_bar = _hud_bar(target_rows, UI_GOLD, 7.0)
+	target_state_label = _hud_label(target_rows, "", 11, UI_GOLD, HORIZONTAL_ALIGNMENT_CENTER)
+	target_panel.visible = false
+
+	# 右上：紧凑的次级信息。
+	var info_panel := PanelContainer.new()
+	info_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	info_panel.anchor_left = 1.0
+	info_panel.anchor_right = 1.0
+	info_panel.offset_left = -330.0
+	info_panel.offset_top = 20.0
+	info_panel.offset_right = -20.0
+	info_panel.offset_bottom = 104.0
+	info_panel.add_theme_stylebox_override("panel", _hud_panel_style())
+	root.add_child(info_panel)
+	var info_rows := VBoxContainer.new()
+	info_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	info_rows.add_theme_constant_override("separation", 2)
+	info_panel.add_child(info_rows)
+	money_label = _hud_label(info_rows, "", 13, UI_GOLD, HORIZONTAL_ALIGNMENT_RIGHT)
+	status_label = _hud_label(info_rows, "", 11, UI_DIM, HORIZONTAL_ALIGNMENT_RIGHT)
+	buff_label = _hud_label(info_rows, " ", 11, UI_TEAL, HORIZONTAL_ALIGNMENT_RIGHT)
+
+	# 底部中央：技能键位、消耗、冷却与持续状态。
+	var skill_bar := HBoxContainer.new()
+	skill_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	skill_bar.anchor_left = 0.5
+	skill_bar.anchor_right = 0.5
+	skill_bar.anchor_top = 1.0
+	skill_bar.anchor_bottom = 1.0
+	skill_bar.offset_left = -294.0
+	skill_bar.offset_right = 294.0
+	skill_bar.offset_top = -126.0
+	skill_bar.offset_bottom = -20.0
+	skill_bar.add_theme_constant_override("separation", 10)
+	root.add_child(skill_bar)
+	skill_slots["freeze"] = _build_skill_slot(skill_bar, "Z", "定身", 30)
+	skill_slots["blink"] = _build_skill_slot(skill_bar, "X", "移形闪", 20)
+	skill_slots["shield"] = _build_skill_slot(skill_bar, "V", "护身法", 40)
+	skill_slots["transform"] = _build_skill_slot(skill_bar, "F", "变身", int(C.TRANSFORM_COST))
+
+	var hint := _hud_label(root, "WASD 移动 · 空格 闪避 · 左/右键 攻击 · C 识破 · Q 锁定 · Tab 行囊",
+		11, Color(0.70, 0.69, 0.61, 0.86), HORIZONTAL_ALIGNMENT_CENTER)
+	hint.anchor_left = 0.5
+	hint.anchor_right = 0.5
+	hint.anchor_top = 1.0
+	hint.anchor_bottom = 1.0
+	hint.offset_left = -360.0
+	hint.offset_right = 360.0
+	hint.offset_top = -154.0
+	hint.offset_bottom = -132.0
+
+	player.hp_changed.connect(_refresh_player_hp)
+	player.stamina_changed.connect(_refresh_player_stamina)
+	player.chi_changed.connect(_refresh_player_chi)
+	_refresh_player_hp(player.hp, player.get_max_hp())
+	_refresh_player_stamina(player.stamina, player.get_max_stamina())
+	_refresh_player_chi(player.chi, C.PLAYER_MAX_CHI)
+	_update_skill_hud()
+
+func _build_skill_slot(parent: Control, key: String, title: String, cost: int) -> Dictionary:
+	var panel := Panel.new()
+	panel.custom_minimum_size = Vector2(137.0, 106.0)
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var normal_style := _hud_panel_style()
+	panel.add_theme_stylebox_override("panel", normal_style)
+	parent.add_child(panel)
+
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rows.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	rows.offset_left = 10.0
+	rows.offset_top = 7.0
+	rows.offset_right = -10.0
+	rows.offset_bottom = -7.0
+	rows.add_theme_constant_override("separation", 1)
+	panel.add_child(rows)
+	_hud_label(rows, key, 18, UI_GOLD)
+	_hud_label(rows, title, 15, UI_TEXT)
+	var cost_label := _hud_label(rows, "%d 内力" % cost, 11, UI_DIM)
+	var state_label := _hud_label(rows, "就绪", 11, UI_TEAL)
+
+	var mask := ColorRect.new()
+	mask.color = Color(0.015, 0.020, 0.022, 0.80)
+	mask.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mask.anchor_right = 1.0
+	mask.anchor_bottom = 1.0
+	panel.add_child(mask)
+	mask.visible = false
+	var cd_label := _hud_label(panel, "", 22, UI_GOLD, HORIZONTAL_ALIGNMENT_CENTER)
+	cd_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	cd_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	return {
+		"panel": panel, "mask": mask, "cd": cd_label, "cost": cost_label,
+		"state": state_label, "normal_style": normal_style,
+		"active_style": _hud_panel_style(true), "active": false,
+	}
+
+func _refresh_player_hp(value: float, max_value: float) -> void:
+	if not player_hp_bar:
+		return
+	player_hp_bar.max_value = maxf(max_value, 1.0)
+	player_hp_bar.value = value
+	player_hp_value.text = "HP  %d / %d" % [ceili(value), int(max_value)]
+
+func _refresh_player_stamina(value: float, max_value: float) -> void:
+	if not player_stamina_bar:
+		return
+	player_stamina_bar.max_value = maxf(max_value, 1.0)
+	player_stamina_bar.value = value
+	player_stamina_value.text = "%d / %d" % [ceili(value), int(max_value)]
+
+func _refresh_player_chi(value: float, max_value: float) -> void:
+	if not player_chi_bar:
+		return
+	player_chi_bar.max_value = maxf(max_value, 1.0)
+	player_chi_bar.value = value
+	player_chi_value.text = "%d / %d" % [ceili(value), int(max_value)]
+
+func _update_target_hud() -> void:
+	if not player or not target_panel:
+		return
+	var locked: Node3D = player.lock_target
+	if is_instance_valid(locked) and locked in enemies and locked.hp > 0.0:
+		hud_enemy = locked
+	elif hud_enemy == null or not is_instance_valid(hud_enemy) or hud_enemy.hp <= 0.0:
+		_pick_hud_enemy()
+	var valid: bool = is_instance_valid(hud_enemy) and hud_enemy.hp > 0.0
+	target_panel.visible = valid
+	if not valid:
+		return
+	target_hp_bar.max_value = hud_enemy.hp_max
+	target_hp_bar.value = hud_enemy.hp
+	target_posture_bar.max_value = hud_enemy.poise_max
+	target_posture_bar.value = maxf(hud_enemy.poise, 0.0)
+	target_name_label.text = "烬门护法　%d / %d" % [ceili(hud_enemy.hp), int(hud_enemy.hp_max)]
+	var broken: bool = hud_enemy.poise <= 0.0
+	target_state_label.text = "架 势 崩 坏" if broken else "架势  %d / %d" % [ceili(hud_enemy.poise), int(hud_enemy.poise_max)]
+	target_state_label.add_theme_color_override("font_color", UI_GOLD if broken else UI_DIM)
+
 func _pick_hud_enemy() -> void:
 	var best: Node = null
 	var best_d := 1e9
 	for e in enemies:
-		if is_instance_valid(e):
+		if is_instance_valid(e) and e.hp > 0.0:
 			var d: float = player.global_position.distance_to(e.global_position)
 			if d < best_d:
 				best_d = d
 				best = e
 	hud_enemy = best
 
-func _build_hud() -> void:
-	var canvas := CanvasLayer.new()
-	add_child(canvas)
+func _update_skill_hud() -> void:
+	if not player or skill_slots.is_empty():
+		return
+	_update_skill_slot("freeze", C.SPELL_FREEZE)
+	_update_skill_slot("blink", C.SPELL_BLINK)
+	_update_skill_slot("shield", C.SPELL_SHIELD, player.buff_guard > 0.0,
+		"护身 %.1fs" % player.buff_guard)
+	_update_skill_slot("transform", {"cost": C.TRANSFORM_COST, "cd": 0.0},
+		player.transformed, "化身 %.1fs" % player.transform_timer)
 
-	# 玩家血条 / 体力 / 内力
-	var php := ColorRect.new()
-	php.color = Color(0, 0, 0, 0.5)
-	php.size = Vector2(240, 60)
-	php.position = Vector2(20, 20)
-	canvas.add_child(php)
-	var php_bar := ColorRect.new()
-	php_bar.color = Color(0.75, 0.55, 0.30)
-	php_bar.size = Vector2(236, 18)
-	php_bar.position = Vector2(2, 2)
-	php.add_child(php_bar)
-	var php_label := Label.new()
-	php_label.text = "HP 100 / 100"
-	php_label.position = Vector2(6, 22)
-	php_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.85))
-	php.add_child(php_label)
-	var pst_bar := ColorRect.new()
-	pst_bar.color = Color(0.55, 0.65, 0.70)
-	pst_bar.size = Vector2(236, 6)
-	pst_bar.position = Vector2(2, 42)
-	php.add_child(pst_bar)
-	var pchi_bar := ColorRect.new()
-	pchi_bar.color = Color(0.42, 0.62, 0.58)
-	pchi_bar.size = Vector2(236, 6)
-	pchi_bar.position = Vector2(2, 51)
-	php.add_child(pchi_bar)
-	player.hp_changed.connect(func(v, m):
-		php_bar.size.x = 236.0 * (v / m)
-		php_label.text = "HP %d / %d" % [int(v), int(m)])
-	player.stamina_changed.connect(func(v, m):
-		pst_bar.size.x = 236.0 * (v / m))
-	player.chi_changed.connect(func(v, m):
-		pchi_bar.size.x = 236.0 * (v / m))
-
-	# 敌人血条 + 架势
-	var ehp := ColorRect.new()
-	ehp.color = Color(0, 0, 0, 0.5)
-	ehp.size = Vector2(300, 56)
-	ehp.position = Vector2(490, 20)
-	canvas.add_child(ehp)
-	ehp_bar = ColorRect.new()
-	ehp_bar.color = Color(0.72, 0.22, 0.20)
-	ehp_bar.size = Vector2(296, 18)
-	ehp_bar.position = Vector2(2, 2)
-	ehp.add_child(ehp_bar)
-	epoise_bar = ColorRect.new()
-	epoise_bar.color = Color(0.85, 0.70, 0.30)
-	epoise_bar.size = Vector2(296, 10)
-	epoise_bar.position = Vector2(2, 24)
-	ehp.add_child(epoise_bar)
-	ehp_label = Label.new()
-	ehp_label.text = "烬门护法"
-	ehp_label.position = Vector2(6, 36)
-	ehp_label.add_theme_color_override("font_color", Color(0.9, 0.85, 0.75))
-	ehp.add_child(ehp_label)
-
-	# 操作提示
-	var hint := Label.new()
-	hint.text = "WASD 移动 · Ctrl 跳 · 空格 闪避 · 左键轻击 · 右键重击 · C 识破 · Q 锁定 · Z/X/V 法术 · F 变身 · Tab 行囊 · P 刀谱"
-	hint.position = Vector2(20, 660)
-	hint.add_theme_color_override("font_color", Color(0.8, 0.8, 0.7, 0.8))
-	canvas.add_child(hint)
-
-	# 铜钱 / 丹药状态
-	money_label = Label.new()
-	money_label.text = "铜钱 120"
-	money_label.position = Vector2(20, 84)
-	money_label.add_theme_color_override("font_color", Color(0.85, 0.72, 0.42))
-	canvas.add_child(money_label)
-
-	status_label = Label.new()
-	status_label.position = Vector2(20, 106)
-	status_label.add_theme_font_size_override("font_size", 12)
-	status_label.add_theme_color_override("font_color", Color(0.72, 0.70, 0.62))
-	canvas.add_child(status_label)
-
-	buff_label = Label.new()
-	buff_label.position = Vector2(20, 124)
-	buff_label.add_theme_font_size_override("font_size", 12)
-	buff_label.add_theme_color_override("font_color", Color(0.68, 0.78, 0.72))
-	canvas.add_child(buff_label)
+func _update_skill_slot(key: String, definition: Dictionary,
+		active: bool = false, active_text: String = "") -> void:
+	if not skill_slots.has(key):
+		return
+	var slot: Dictionary = skill_slots[key]
+	var cooldown: float = float(player.spell_cd.get(key, 0.0)) if key != "transform" else 0.0
+	var max_cooldown: float = float(definition.get("cd", 0.0))
+	var cost: float = float(definition.get("cost", 0.0))
+	var enough_chi: bool = player.chi + 0.001 >= cost
+	var mask: ColorRect = slot["mask"]
+	mask.visible = cooldown > 0.0
+	if max_cooldown > 0.0:
+		mask.anchor_top = 1.0 - clampf(cooldown / max_cooldown, 0.0, 1.0)
+		mask.offset_top = 0.0
+	var cd_label: Label = slot["cd"]
+	cd_label.visible = cooldown > 0.0
+	cd_label.text = "%.1f" % cooldown if cooldown < 10.0 else str(ceili(cooldown))
+	var state_label: Label = slot["state"]
+	var cost_label: Label = slot["cost"]
+	cost_label.add_theme_color_override("font_color", UI_DIM if enough_chi else Color(0.64, 0.34, 0.27))
+	if active:
+		state_label.text = active_text
+		state_label.add_theme_color_override("font_color", UI_GOLD)
+	elif cooldown > 0.0:
+		state_label.text = "调息"
+		state_label.add_theme_color_override("font_color", UI_DIM)
+	elif not enough_chi:
+		state_label.text = "内力不足"
+		state_label.add_theme_color_override("font_color", Color(0.64, 0.34, 0.27))
+	else:
+		state_label.text = "就绪"
+		state_label.add_theme_color_override("font_color", UI_TEAL)
+	if bool(slot["active"]) != active:
+		slot["active"] = active
+		var panel: Panel = slot["panel"]
+		panel.add_theme_stylebox_override("panel", slot["active_style"] if active else slot["normal_style"])

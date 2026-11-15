@@ -5,6 +5,7 @@ class_name Player
 signal hp_changed(value: float, maxv: float)
 signal stamina_changed(value: float, maxv: float)
 signal chi_changed(value: float, maxv: float)
+signal vfx_requested(kind: StringName, from: Vector3, to: Vector3)
 
 const C = preload("res://scripts/combat.gd")
 const GlbLoader = preload("res://scripts/glb_loader.gd")
@@ -287,8 +288,9 @@ func _build_self() -> void:
 	var tmat := StandardMaterial3D.new()
 	tmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	tmat.albedo_color = Color(1, 1, 1, 0.8)
+	tmat.vertex_color_use_as_albedo = true
 	tmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	tmat.emissive_enabled = true
+	tmat.emission_enabled = true
 	tmat.emission = Color(0.6, 0.8, 1.0)
 	tmat.emission_energy_multiplier = 0.9
 	trail_mi.material_override = tmat
@@ -369,7 +371,7 @@ func _build_weapon_mesh(w: Dictionary) -> MeshInstance3D:
 	weapon_emissive.albedo_color = spec.get("color", Color(0.7, 0.7, 0.7))
 	weapon_emissive.roughness = 0.35
 	weapon_emissive.metallic = 0.6 if spec.get("shape", "cylinder") == "box" else 0.2
-	weapon_emissive.emissive_enabled = true
+	weapon_emissive.emission_enabled = true
 	weapon_emissive.emission = Color(0.15, 0.12, 0.08)
 	weapon_emissive.emission_energy_multiplier = 0.3
 
@@ -704,19 +706,23 @@ func cast_freeze() -> bool:
 	for e in get_tree().get_nodes_in_group("enemy"):
 		if is_instance_valid(e) and e.has_method("apply_freeze"):
 			e.apply_freeze(float(C.SPELL_FREEZE["duration"]))
+	vfx_requested.emit(&"freeze", global_position, global_position)
 	return true
 
 func cast_blink() -> bool:
 	if not _spell_ready("blink", C.SPELL_BLINK):
 		return false
+	var from := global_position
 	global_position -= transform.basis.z * float(C.SPELL_BLINK["distance"])
 	blink_invuln = float(C.SPELL_BLINK["invuln"])
+	vfx_requested.emit(&"blink", from, global_position)
 	return true
 
 func cast_shield() -> bool:
 	if not _spell_ready("shield", C.SPELL_SHIELD):
 		return false
 	buff_guard = maxf(buff_guard, float(C.SPELL_SHIELD["duration"]))
+	vfx_requested.emit(&"shield", global_position, global_position)
 	return true
 
 func try_transform() -> void:
@@ -730,8 +736,9 @@ func try_transform() -> void:
 	if body_pivot:
 		body_pivot.scale = Vector3(1.15, 1.15, 1.15)
 	if body_material:
-		body_material.emissive_enabled = true
+		body_material.emission_enabled = true
 		body_material.emission = Color(0.55, 0.22, 0.10)
+	vfx_requested.emit(&"transform_start", global_position, global_position)
 
 func _end_transform() -> void:
 	transformed = false
@@ -739,7 +746,8 @@ func _end_transform() -> void:
 	if body_pivot:
 		body_pivot.scale = Vector3.ONE
 	if body_material:
-		body_material.emissive_enabled = false
+		body_material.emission_enabled = false
+	vfx_requested.emit(&"transform_end", global_position, global_position)
 	for e in get_tree().get_nodes_in_group("enemy"):
 		if is_instance_valid(e) and e.global_position.distance_to(global_position) <= C.TRANSFORM_END_RADIUS:
 			if e.has_method("take_hit"):
@@ -1049,7 +1057,8 @@ func _update_trail(_delta: float) -> void:
 	for i in range(trail_points.size()):
 		var p: Vector3 = trail_points[i]
 		var alpha: float = float(i) / float(trail_points.size())
-		var width: float = C.TRAIL_WIDTH * alpha
+		var width: float = C.TRAIL_WIDTH * sin(alpha * PI * 0.5)
+		alpha = pow(alpha, 1.4) * 0.88
 		# 计算垂直于轨迹与视线的偏移方向
 		var tangent: Vector3
 		if i > 0:
@@ -1290,10 +1299,11 @@ func _on_parry_counter(attacker: Node) -> void:
 		if "blocking" in attacker:
 			attacker.set("blocking", false)
 		attacker.call("take_hit", 1.0, C.PARRY_COUNTER_POISE, global_position, 9.0, self)
-	# 命中反馈：停顿 + 震动 + 火花
+	# 命中反馈：停顿 + 震动 + 火花 + 金色交叉闪光
+	var spark_pos := global_position - transform.basis.z * 1.1 + Vector3(0, 1.2, 0)
+	vfx_requested.emit(&"parry", spark_pos, spark_pos)
 	var m := get_parent()
 	if m and m.has_method("on_player_hit"):
-		var spark_pos := global_position - transform.basis.z * 1.1 + Vector3(0, 1.2, 0)
 		m.call("on_player_hit", spark_pos, 15.0, true, "parry")
 	# 识破后短暂无敌，避免同帧被连击
 	blink_invuln = maxf(blink_invuln, 0.3)
@@ -1361,8 +1371,16 @@ func _start_attack(atk: Dictionary, _dir: String = "neutral", heavy: bool = fals
 	current_attack_body_turn = float(atk.get("body_turn", 0.0))
 	current_attack_body_turn_done = 0.0
 
-	# 轨迹颜色
-	trail_color = atk.get("trail_color", Color(0.7, 0.85, 1.0))
+	# 普通攻击墨青、重击金色、变身赤金；仅改变表现，不改判定。
+	if transformed:
+		trail_color = Color(1.0, 0.32, 0.08)
+	elif heavy or charge_level > 0:
+		trail_color = Color(1.0, 0.72, 0.24)
+	else:
+		trail_color = Color(0.24, 0.72, 0.68)
+	var trail_material := trail_mi.material_override as StandardMaterial3D
+	if trail_material:
+		trail_material.emission = Color(trail_color.r, trail_color.g, trail_color.b)
 
 	# 多轴旋转：从 rot_from 挥到 rot_to
 	var rot_from: Vector3 = atk.get("rot_from", Vector3(-1.2, 0, 0))
@@ -1455,6 +1473,7 @@ func _start_dodge(dir: Vector3) -> void:
 	stamina_changed.emit(stamina, get_max_stamina())
 	stamina_timer = C.PLAYER_STAMINA_DELAY
 	look_at(global_position + dodge_dir, Vector3.UP)
+	vfx_requested.emit(&"dodge", global_position, global_position + dodge_dir)
 
 func _update_dodge(delta: float) -> void:
 	dodge_timer -= delta
