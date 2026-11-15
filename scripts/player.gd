@@ -650,7 +650,7 @@ func _replace_key(action: String, code: int) -> void:
 		if ev is InputEventKey:
 			InputMap.action_erase_event(action, ev)
 	var k := InputEventKey.new()
-	k.keycode = code
+	k.keycode = code as Key
 	InputMap.action_add_event(action, k)
 
 func rebind(action: String, code: int) -> void:

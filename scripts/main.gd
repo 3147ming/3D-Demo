@@ -75,7 +75,6 @@ func _build_world() -> void:
 	for i in range(1, 8):
 		env.environment.set("glow_levels/" + str(i), true)
 	# 色彩分级（暗部偏冷青，亮部偏暖橙）
-	env.environment.color_correction_enabled = true
 	env.environment.tonemap_mode = Environment.TONE_MAPPER_ACES
 	env.environment.adjustment_brightness = 1.0
 	env.environment.adjustment_contrast = 1.15
@@ -90,7 +89,6 @@ func _build_world() -> void:
 	sun.light_color = Color(0.95, 0.88, 0.78)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 0.8
-	sun.shadow_penumbra = 2.0
 	add_child(sun)
 
 	# 补光（冷色填充）
