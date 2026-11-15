@@ -29,6 +29,7 @@ var dodge_timer := 0.0
 
 # 识破
 var parry_timer := 0.0
+var gait_phase := 0.0
 
 # 相机
 var camera_pivot: Node3D
@@ -46,10 +47,26 @@ const CAM_FOLLOW_K := 14.0    # 位置平滑系数
 const CAM_ROTATE_K := 18.0    # 朝向平滑系数
 
 # 节点引用
-var body_mesh: MeshInstance3D
+var body_pivot: Node3D
+var torso: MeshInstance3D
+var head_pivot: Node3D
+var arm_L: Node3D
+var arm_R: Node3D
+var forearm_L: Node3D
+var forearm_R: Node3D
+var leg_L: Node3D
+var leg_R: Node3D
+var calf_L: Node3D
+var calf_R: Node3D
+var body_material: StandardMaterial3D
 var weapon_pivot: Node3D
+var weapon_mesh: MeshInstance3D
 var hitbox: Hitbox
 var anim_tween: Tween
+
+# 武器 / 武学
+var current_weapon: Dictionary = {}
+var current_style: Dictionary = {}
 
 func _ready() -> void:
 	_build_self()
@@ -57,6 +74,7 @@ func _ready() -> void:
 	collision_mask = 1 | (1 << 2)
 	add_to_group("player")
 	add_to_group("hurtbox")
+	equip_style(StyleDB.DEFAULT_ID)
 
 func _build_self() -> void:
 	# 胶囊碰撞
@@ -67,44 +85,75 @@ func _build_self() -> void:
 	col.position = Vector3(0, 0.9, 0)
 	add_child(col)
 
-	# 身体（占位：上半身圆柱 + 头球，风格化）
-	body_mesh = MeshInstance3D.new()
-	var body := CapsuleMesh.new()
-	body.radius = 0.4
-	body.height = 1.4
-	body_mesh.mesh = body
-	body_mesh.position = Vector3(0, 1.0, 0)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.55, 0.62, 0.70)
-	mat.roughness = 0.7
-	body_mesh.material_override = mat
-	add_child(body_mesh)
+	# ---- 程序化人形（body_pivot 为整体锚点，后续可换 GLTF 蒙皮）----
+	body_pivot = Node3D.new()
+	add_child(body_pivot)
 
-	var head := MeshInstance3D.new()
-	head.mesh = SphereMesh.new()
-	head.mesh.radius = 0.22
-	head.mesh.height = 0.44
-	head.position = Vector3(0, 1.95, 0)
-	var hmat := StandardMaterial3D.new()
-	hmat.albedo_color = Color(0.82, 0.75, 0.66)
-	head.material_override = hmat
-	add_child(head)
+	body_material = StandardMaterial3D.new()
+	body_material.albedo_color = Color(0.52, 0.58, 0.66)
+	body_material.roughness = 0.75
 
-	# 武器枢轴 + 棍
+	# 躯干 / 骨盆
+	torso = _make_mesh(_capsule(0.21, 0.70), body_material, Vector3(0, 1.18, 0))
+	body_pivot.add_child(torso)
+	var pelvis := _make_mesh(_capsule(0.18, 0.26), body_material, Vector3(0, 0.86, 0))
+	body_pivot.add_child(pelvis)
+
+	# 头颈
+	head_pivot = Node3D.new()
+	head_pivot.position = Vector3(0, 1.52, 0)
+	body_pivot.add_child(head_pivot)
+	var neck := _make_mesh(_capsule(0.06, 0.12), body_material, Vector3(0, 0.04, 0))
+	head_pivot.add_child(neck)
+	var head := _make_mesh(_sphere(0.20), _skin_material(), Vector3(0, 0.20, 0))
+	head_pivot.add_child(head)
+
+	# 双臂：肩 → 上臂 + 肘 → 前臂 + 手
+	arm_L = Node3D.new()
+	arm_L.position = Vector3(-0.28, 1.34, 0)
+	body_pivot.add_child(arm_L)
+	arm_L.add_child(_make_mesh(_capsule(0.085, 0.42), body_material, Vector3(0, -0.21, 0)))
+	forearm_L = Node3D.new()
+	forearm_L.position = Vector3(0, -0.42, 0)
+	arm_L.add_child(forearm_L)
+	forearm_L.add_child(_make_mesh(_capsule(0.07, 0.40), body_material, Vector3(0, -0.20, 0)))
+	forearm_L.add_child(_make_mesh(_box(Vector3(0.10, 0.12, 0.10)), _skin_material(), Vector3(0, -0.42, 0)))
+
+	arm_R = Node3D.new()
+	arm_R.position = Vector3(0.28, 1.34, 0)
+	body_pivot.add_child(arm_R)
+	arm_R.add_child(_make_mesh(_capsule(0.085, 0.42), body_material, Vector3(0, -0.21, 0)))
+	forearm_R = Node3D.new()
+	forearm_R.position = Vector3(0, -0.42, 0)
+	arm_R.add_child(forearm_R)
+	forearm_R.add_child(_make_mesh(_capsule(0.07, 0.40), body_material, Vector3(0, -0.20, 0)))
+	forearm_R.add_child(_make_mesh(_box(Vector3(0.10, 0.12, 0.10)), _skin_material(), Vector3(0, -0.42, 0)))
+
+	# 双腿：髋 → 大腿 + 膝 → 小腿 + 脚
+	leg_L = Node3D.new()
+	leg_L.position = Vector3(-0.16, 0.84, 0)
+	body_pivot.add_child(leg_L)
+	leg_L.add_child(_make_mesh(_capsule(0.10, 0.42), body_material, Vector3(0, -0.21, 0)))
+	calf_L = Node3D.new()
+	calf_L.position = Vector3(0, -0.42, 0)
+	leg_L.add_child(calf_L)
+	calf_L.add_child(_make_mesh(_capsule(0.085, 0.40), body_material, Vector3(0, -0.20, 0)))
+	calf_L.add_child(_make_mesh(_box(Vector3(0.12, 0.08, 0.24)), body_material, Vector3(0, -0.42, 0.05)))
+
+	leg_R = Node3D.new()
+	leg_R.position = Vector3(0.16, 0.84, 0)
+	body_pivot.add_child(leg_R)
+	leg_R.add_child(_make_mesh(_capsule(0.10, 0.42), body_material, Vector3(0, -0.21, 0)))
+	calf_R = Node3D.new()
+	calf_R.position = Vector3(0, -0.42, 0)
+	leg_R.add_child(calf_R)
+	calf_R.add_child(_make_mesh(_capsule(0.085, 0.40), body_material, Vector3(0, -0.20, 0)))
+	calf_R.add_child(_make_mesh(_box(Vector3(0.12, 0.08, 0.24)), body_material, Vector3(0, -0.42, 0.05)))
+
+	# 武器枢轴（路径保持不变，武器网格与 hitbox 挂在下面）
 	weapon_pivot = Node3D.new()
-	weapon_pivot.position = Vector3(0.4, 1.3, 0.3)
+	weapon_pivot.position = Vector3(0.34, 1.0, 0.06)
 	add_child(weapon_pivot)
-	var staff := MeshInstance3D.new()
-	staff.mesh = CylinderMesh.new()
-	staff.mesh.top_radius = 0.05
-	staff.mesh.bottom_radius = 0.05
-	staff.mesh.height = 2.2
-	staff.position = Vector3(0, 1.1, 0)
-	var smat := StandardMaterial3D.new()
-	smat.albedo_color = Color(0.62, 0.50, 0.30)
-	smat.roughness = 0.5
-	staff.material_override = smat
-	weapon_pivot.add_child(staff)
 
 	# 攻击判定盒（look_at 使 -Z 为前方，判定盒必须放在 -Z 侧）
 	hitbox = Hitbox.new()
@@ -112,7 +161,7 @@ func _build_self() -> void:
 	hs.shape = BoxShape3D.new()
 	hs.shape.size = Vector3(1.2, 1.4, 2.2)
 	hitbox.add_child(hs)
-	hitbox.position = Vector3(0, 1.2, -1.5)
+	hitbox.position = Vector3(0, 0.15, -1.4)
 	weapon_pivot.add_child(hitbox)
 
 	# 相机（放置在 +Z 侧，相机自身看向 -Z，正好面向角色）
@@ -144,6 +193,117 @@ func _build_self() -> void:
 	lock_marker.visible = false
 	add_child(lock_marker)
 
+# ---------------- 占位几何工具 ----------------
+func _capsule(r: float, h: float) -> CapsuleMesh:
+	var m := CapsuleMesh.new()
+	m.radius = r
+	m.height = h
+	return m
+
+func _sphere(r: float) -> SphereMesh:
+	var m := SphereMesh.new()
+	m.radius = r
+	m.height = r * 2.0
+	return m
+
+func _box(size: Vector3) -> BoxMesh:
+	var m := BoxMesh.new()
+	m.size = size
+	return m
+
+func _make_mesh(mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	return mi
+
+func _skin_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.82, 0.74, 0.64)
+	m.roughness = 0.8
+	return m
+
+# ---------------- 武器 / 武学 ----------------
+func equip_weapon(id: String) -> void:
+	current_weapon = WeaponDB.get_weapon(id)
+	if weapon_mesh and is_instance_valid(weapon_mesh):
+		weapon_mesh.queue_free()
+	weapon_mesh = _build_weapon_mesh(current_weapon)
+	weapon_pivot.add_child(weapon_mesh)
+	_apply_reach(float(current_weapon.get("reach", 2.4)))
+
+func _build_weapon_mesh(w: Dictionary) -> MeshInstance3D:
+	var spec: Dictionary = w.get("mesh", {})
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = spec.get("color", Color(0.7, 0.7, 0.7))
+	mat.roughness = 0.45
+	mat.metallic = 0.3 if spec.get("shape", "cylinder") == "box" else 0.0
+
+	var mi := MeshInstance3D.new()
+	match spec.get("shape", "cylinder"):
+		"box":
+			var bm := BoxMesh.new()
+			bm.size = spec.get("size", Vector3(0.06, 1.4, 0.16))
+			mi.mesh = bm
+			mi.position = Vector3(0, 0.7, 0)
+		"spear":
+			var cm := CylinderMesh.new()
+			cm.top_radius = spec.get("radius", 0.035)
+			cm.bottom_radius = spec.get("radius", 0.035)
+			cm.height = spec.get("length", 2.8)
+			mi.mesh = cm
+			mi.position = Vector3(0, spec.get("length", 2.8) * 0.5, 0)
+			var tip := MeshInstance3D.new()
+			var tm := CylinderMesh.new()
+			tm.top_radius = 0.0
+			tm.bottom_radius = 0.07
+			tm.height = 0.3
+			tip.mesh = tm
+			tip.position = Vector3(0, spec.get("length", 2.8) + 0.15, 0)
+			tip.material_override = mat
+			mi.add_child(tip)
+		_:
+			var cm2 := CylinderMesh.new()
+			cm2.top_radius = spec.get("radius", 0.05)
+			cm2.bottom_radius = spec.get("radius", 0.05)
+			cm2.height = spec.get("length", 2.2)
+			mi.mesh = cm2
+			mi.position = Vector3(0, spec.get("length", 2.2) * 0.5, 0)
+	mi.material_override = mat
+	return mi
+
+func _apply_reach(reach: float) -> void:
+	var hs := hitbox.get_child(0) as CollisionShape3D
+	if hs and hs.shape is BoxShape3D:
+		hs.shape.size = Vector3(1.2, 1.4, reach)
+	hitbox.position = Vector3(0, 0.15, -reach * 0.6)
+
+func equip_style(id: String) -> void:
+	current_style = StyleDB.get_style(id)
+	combo_idx = 0
+	equip_weapon(String(current_style.get("weapon_id", WeaponDB.DEFAULT_ID)))
+
+func _scaled_move(base: Dictionary) -> Dictionary:
+	var m := base.duplicate()
+	var w := current_weapon
+	var sp := float(w.get("speed_mult", 1.0))
+	m["startup"] = float(base.get("startup", 0.1)) * sp
+	m["active"] = float(base.get("active", 0.1)) * sp
+	m["recovery"] = float(base.get("recovery", 0.2)) * sp
+	m["dmg"] = float(base.get("dmg", 10.0)) * float(w.get("damage_mult", 1.0))
+	m["poise"] = float(base.get("poise", 10.0)) * float(w.get("poise_mult", 1.0))
+	m["stamina"] = float(base.get("stamina", 8.0)) * float(w.get("stamina_mult", 1.0))
+	if w.has("reach"):
+		m["reach"] = float(w["reach"])
+	return m
+
+func _light_moves() -> Array:
+	return current_style.get("light_combo", [])
+
+func _heavy_move() -> Dictionary:
+	return current_style.get("heavy", {})
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		yaw -= event.relative.x * 0.003
@@ -157,6 +317,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		elif event.keycode == KEY_F:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		elif event.keycode == KEY_1:
+			equip_style("staff_style")
+		elif event.keycode == KEY_2:
+			equip_style("saber_style")
 
 func _physics_process(delta: float) -> void:
 	if state == State.DEAD:
@@ -186,8 +350,61 @@ func _physics_process(delta: float) -> void:
 	_update_lock(delta)
 	move_and_slide()
 
+	_update_pose(delta)
 	_update_camera(delta)
 	_update_marker()
+
+# ---------------- 程序化姿态 ----------------
+func _update_pose(delta: float) -> void:
+	if not body_pivot:
+		return
+
+	# 躯干倾角：受击后仰 / 闪避前倾
+	var tilt := 0.0
+	if state == State.HURT:
+		tilt = 0.18
+	elif state == State.DODGE:
+		tilt = -0.22
+	body_pivot.rotation.x = lerp(body_pivot.rotation.x, tilt, 0.2)
+
+	var planar := Vector2(velocity.x, velocity.z).length()
+	var amp := clampf(planar / C.PLAYER_SPEED, 0.0, 1.0)
+	gait_phase += delta * (6.0 + 6.0 * amp)
+
+	if state == State.ATTACK:
+		# 持械臂跟随武器挥动，另一侧维持平衡
+		arm_R.rotation.x = lerp(arm_R.rotation.x, weapon_pivot.rotation.x * 0.75, 0.45)
+		forearm_R.rotation.x = lerp(forearm_R.rotation.x, weapon_pivot.rotation.x * 0.25, 0.4)
+		arm_L.rotation.x = lerp(arm_L.rotation.x, 0.25, 0.2)
+		leg_L.rotation.x = lerp(leg_L.rotation.x, 0.18, 0.15)
+		leg_R.rotation.x = lerp(leg_R.rotation.x, -0.12, 0.15)
+		calf_L.rotation.x = lerp(calf_L.rotation.x, -0.15, 0.15)
+		calf_R.rotation.x = lerp(calf_R.rotation.x, 0.0, 0.15)
+		return
+
+	if amp > 0.08:
+		# 步态：双腿交替、双臂反向摆动
+		var s := sin(gait_phase)
+		var swing := 0.55 * amp
+		leg_L.rotation.x = s * swing
+		leg_R.rotation.x = -s * swing
+		calf_L.rotation.x = maxf(0.0, -s) * 0.7 * amp
+		calf_R.rotation.x = maxf(0.0, s) * 0.7 * amp
+		arm_L.rotation.x = -s * 0.45 * amp
+		arm_R.rotation.x = s * 0.35 * amp
+		forearm_L.rotation.x = -0.25 * amp
+		forearm_R.rotation.x = -0.25 * amp
+	else:
+		# 站立呼吸
+		var breathe := sin(Time.get_ticks_msec() * 0.002) * 0.05
+		leg_L.rotation.x = lerp(leg_L.rotation.x, 0.0, 0.15)
+		leg_R.rotation.x = lerp(leg_R.rotation.x, 0.0, 0.15)
+		calf_L.rotation.x = lerp(calf_L.rotation.x, 0.0, 0.15)
+		calf_R.rotation.x = lerp(calf_R.rotation.x, 0.0, 0.15)
+		arm_L.rotation.x = lerp(arm_L.rotation.x, breathe, 0.12)
+		arm_R.rotation.x = lerp(arm_R.rotation.x, -breathe, 0.12)
+		forearm_L.rotation.x = lerp(forearm_L.rotation.x, 0.0, 0.12)
+		forearm_R.rotation.x = lerp(forearm_R.rotation.x, 0.0, 0.12)
 
 # ---------------- 相机 ----------------
 func _update_camera(delta: float) -> void:
@@ -257,7 +474,7 @@ func _update_move(delta: float) -> void:
 	velocity.z = move_dir.z * speed
 	if not is_on_floor():
 		velocity.y -= 18.0 * delta
-	if Input.is_action_pressed("jump") and is_on_floor():
+	if Input.is_action_just_pressed("jump") and is_on_floor():
 		velocity.y = C.PLAYER_JUMP_VELOCITY
 
 	if move_dir.length() > 0.1:
@@ -268,16 +485,17 @@ func _update_move(delta: float) -> void:
 
 # ---------------- 全局输入（连招缓冲） ----------------
 func _handle_global_input() -> void:
+	var moves := _light_moves()
 	if Input.is_action_just_pressed("light_attack"):
 		if state == State.ATTACK:
 			combo_buffer = 0.4   # 400ms 内衔接
-		elif state in [State.IDLE, State.MOVE]:
+		elif state in [State.IDLE, State.MOVE] and moves.size() > 0:
 			heavy_flag = false
-			_start_attack(C.LIGHT_COMBO[combo_idx])
+			_start_attack(_scaled_move(moves[combo_idx]))
 	elif Input.is_action_just_pressed("heavy_attack"):
 		if state in [State.IDLE, State.MOVE]:
 			heavy_flag = true
-			_start_attack(C.HEAVY, true)
+			_start_attack(_scaled_move(_heavy_move()), true)
 	elif Input.is_action_just_pressed("dodge") and stamina >= C.PLAYER_DODGE_COST:
 		var dir := Vector3.ZERO
 		var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
@@ -304,11 +522,13 @@ func _start_attack(atk: Dictionary, heavy := false) -> void:
 	attack_timer = atk.startup
 	velocity.x = 0; velocity.z = 0
 	# 武器挥动动画
+	var from_deg := float(atk.get("from_deg", -80.0))
+	var to_deg := float(atk.get("to_deg", 70.0))
 	if anim_tween: anim_tween.kill()
 	anim_tween = create_tween()
-	anim_tween.tween_property(weapon_pivot, "rotation:x", deg_to_rad(-80), atk.startup)
-	anim_tween.tween_callback(func(): weapon_pivot.rotation.x = deg_to_rad(-80))
-	anim_tween.tween_property(weapon_pivot, "rotation:x", deg_to_rad(70), atk.active)
+	anim_tween.tween_property(weapon_pivot, "rotation:x", deg_to_rad(from_deg), atk.startup)
+	anim_tween.tween_callback(func(): weapon_pivot.rotation.x = deg_to_rad(from_deg))
+	anim_tween.tween_property(weapon_pivot, "rotation:x", deg_to_rad(to_deg), atk.active)
 	anim_tween.tween_callback(func(): hitbox.activate(atk.dmg, atk.poise, self, 6.0))
 	anim_tween.tween_interval(atk.active)
 	anim_tween.tween_callback(func(): hitbox.deactivate(); weapon_pivot.rotation.x = 0)
@@ -328,10 +548,11 @@ func _update_attack(delta: float) -> void:
 			attack_timer = current_attack.recovery
 		"recovery":
 			# 连招衔接
-			if not heavy_flag and combo_buffer > 0.0:
-				combo_idx = (combo_idx + 1) % C.LIGHT_COMBO.size()
+			var moves := _light_moves()
+			if not heavy_flag and combo_buffer > 0.0 and moves.size() > 0:
+				combo_idx = (combo_idx + 1) % moves.size()
 				combo_buffer = 0.0
-				_start_attack(C.LIGHT_COMBO[combo_idx])
+				_start_attack(_scaled_move(moves[combo_idx]))
 			else:
 				combo_idx = 0
 				combo_buffer = 0.0

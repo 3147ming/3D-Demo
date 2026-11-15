@@ -155,7 +155,7 @@ func _build_hud() -> void:
 
 	# 操作提示
 	var hint := Label.new()
-	hint.text = "WASD 移动 · 空格 跳跃 · 左键/J 轻击 · 右键/K 重击 · L 闪避 · C 识破 · Q 锁定 · ESC 释放鼠标"
+	hint.text = "WASD 移动 · Ctrl 跳跃 · 空格 闪避 · 左键/J 轻击 · 右键/K 重击 · C 识破 · Q 锁定 · 1/2 换武学"
 	hint.position = Vector2(20, 660)
 	hint.add_theme_color_override("font_color", Color(0.8, 0.8, 0.7, 0.8))
 	canvas.add_child(hint)
