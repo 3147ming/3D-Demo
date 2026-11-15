@@ -49,5 +49,5 @@ func _apply_hit(body: Node) -> void:
 	if body.is_in_group("hurtbox"):
 		_hit[body] = true
 		var hit_pos: Vector3 = body.global_position + Vector3(0, 1.0, 0)
-		body.call("take_hit", damage, poise_damage, global_position, knockback)
+		body.call("take_hit", damage, poise_damage, global_position, knockback, owner_node)
 		hit_landed.emit(hit_pos, damage, is_heavy)

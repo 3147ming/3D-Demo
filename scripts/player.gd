@@ -184,6 +184,20 @@ func _build_self() -> void:
 	col.position = Vector3(0, 0.9, 0)
 	add_child(col)
 
+	# 脚下接触阴影（程序化模型/GLB 都适用，强化落地感）
+	var shadow_mat := StandardMaterial3D.new()
+	shadow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	shadow_mat.albedo_color = Color(0, 0, 0, 0.35)
+	shadow_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var shadow_quad := QuadMesh.new()
+	shadow_quad.size = Vector2(1.6, 1.6)
+	shadow_quad.material = shadow_mat
+	var shadow := MeshInstance3D.new()
+	shadow.mesh = shadow_quad
+	shadow.rotation.x = deg_to_rad(-90)
+	shadow.position = Vector3(0, 0.03, 0)
+	add_child(shadow)
+
 	# ---- 程序化人形（body_pivot 为整体锚点，后续可换 GLTF 蒙皮）----
 	body_pivot = Node3D.new()
 	add_child(body_pivot)
@@ -1166,6 +1180,9 @@ func _handle_global_input() -> void:
 		if state in [State.IDLE, State.MOVE]:
 			_start_heavy_charge()
 	elif Input.is_action_just_pressed("dodge") and stamina >= C.PLAYER_DODGE_COST:
+		# 攻击中闪避 = 取消后摇（手感关键），并清掉延迟判定
+		if state == State.ATTACK:
+			_cancel_attack()
 		var dir := Vector3.ZERO
 		var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 		var cam_basis := Basis(Vector3.UP, cam_yaw)
@@ -1261,6 +1278,44 @@ func _release_heavy_charge() -> void:
 		weapon_emissive.emission = Color(0.15, 0.12, 0.08)
 	heavy_flag = true
 	_start_attack(atk, "neutral", true, level)
+
+# ---------------- 识破反击 ----------------
+func _on_parry_counter(attacker: Node) -> void:
+	Sfx.play("parry")
+	# 反打：削对方架势（大概率直接崩坏），并轻微掉血
+	if attacker and is_instance_valid(attacker) and attacker.has_method("take_hit"):
+		attacker.call("take_hit", 1.0, C.PARRY_COUNTER_POISE, global_position, 9.0, self)
+	# 命中反馈：停顿 + 震动 + 火花
+	var m := get_parent()
+	if m and m.has_method("on_player_hit"):
+		var spark_pos := global_position - transform.basis.z * 1.1 + Vector3(0, 1.2, 0)
+		m.call("on_player_hit", spark_pos, 15.0, true, "parry")
+	# 识破后短暂无敌，避免同帧被连击
+	blink_invuln = maxf(blink_invuln, 0.3)
+
+# ---------------- 攻击取消 ----------------
+## 闪避打断攻击时清干净残留状态，避免延迟触发的判定盒造成"幽灵命中"
+func _cancel_attack() -> void:
+	if anim_tween:
+		anim_tween.kill()
+		anim_tween = null
+	if hitbox:
+		hitbox.deactivate()
+	trail_active = false
+	trail_points.clear()
+	weapon_pivot.rotation = Vector3.ZERO
+	body_pivot.rotation.y = 0.0
+	if weapon_mesh:
+		weapon_mesh.scale = Vector3.ONE
+	current_attack = {}
+	attack_phase = ""
+	combo_buffer = 0.0
+	heavy_flag = false
+	current_attack_step = 0.0
+	current_attack_step_done = 0.0
+	current_attack_body_turn = 0.0
+	current_attack_body_turn_done = 0.0
+	state = State.IDLE
 
 # ---------------- 攻击 ----------------
 func _start_attack(atk: Dictionary, _dir: String = "neutral", heavy: bool = false, charge_level: int = 0) -> void:
@@ -1418,13 +1473,14 @@ func _update_hurt(delta: float) -> void:
 	else:
 		state = State.IDLE
 
-func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0) -> void:
+func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0, attacker: Node = null) -> void:
 	if state == State.DEAD:
 		return
 	if is_invincible():
 		return
 	if is_parrying():
-		# 识破成功：反弹架势伤害给攻击者（此处简单处理）
+		# 识破成功：反打攻击者的架势
+		_on_parry_counter(attacker)
 		return
 	# 防御减伤，至少造成 1 点；金刚散期间再减半
 	var actual := maxf(1.0, dmg - get_defense())

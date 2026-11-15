@@ -318,7 +318,7 @@ func _update_broken(delta: float) -> void:
 		posture_changed.emit(poise, C.ENEMY_MAX_POISE)
 		state = State.CHASE
 
-func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> void:
+func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0, _attacker: Node = null) -> void:
 	if state in [State.DEAD, State.BROKEN]:
 		if state == State.BROKEN:
 			# 处决伤害加倍

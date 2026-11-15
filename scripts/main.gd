@@ -34,11 +34,17 @@ var slowmo_scale := 1.0
 var cam_original_pos: Vector3 = Vector3.ZERO
 var spark_scene: PackedScene = null
 var dust_scene: PackedScene = null
+# 命中粒子池（复用节点，避免每次命中新建/销毁造成卡顿）
+var spark_pool: Array[GPUParticles3D] = []
+var dust_pool: Array[GPUParticles3D] = []
+var pool_idx := 0
 
 func _ready() -> void:
 	_build_world()
 	_build_rain()
 	_build_ambient_particles()
+	_build_vfx_pool()
+	_build_props()
 	_spawn_player()
 	_spawn_enemies()
 	_build_hud()
@@ -114,7 +120,19 @@ func _build_world() -> void:
 	ground.mesh.size = Vector2(60, 60)
 	var gmat := StandardMaterial3D.new()
 	gmat.albedo_color = Color(0.18, 0.17, 0.20)
-	gmat.roughness = 0.9
+	# 程序化噪声：让地面有不规则的石质明暗与粗糙度变化
+	var gnoise := FastNoiseLite.new()
+	gnoise.frequency = 0.05
+	gnoise.fractal_octaves = 3
+	var gtex := NoiseTexture2D.new()
+	gtex.width = 256
+	gtex.height = 256
+	gtex.seamless = true
+	gtex.noise = gnoise
+	gmat.albedo_texture = gtex
+	gmat.uv1_scale = Vector3(10, 10, 1)
+	gmat.roughness = 0.92
+	gmat.roughness_texture = gtex
 	ground.material_override = gmat
 	ground.rotation.x = deg_to_rad(-90)
 	add_child(ground)
@@ -246,69 +264,105 @@ func _spawn_hit_vfx(pos: Vector3, heavy: bool) -> void:
 	_spawn_sparks(pos, heavy)
 	_spawn_dust_ring(pos, heavy)
 
-func _spawn_sparks(pos: Vector3, heavy: bool) -> void:
+# ---- 命中粒子池（预创建，命中时只复用不新建）----
+func _build_vfx_pool() -> void:
+	var spark_mat := StandardMaterial3D.new()
+	spark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	spark_mat.albedo_color = Color(1.0, 0.85, 0.4)
+	spark_mat.emissive_enabled = true
+	spark_mat.emission = Color(1.0, 0.7, 0.2)
+	var spark_quad := QuadMesh.new()
+	spark_quad.size = Vector2(0.06, 0.06)
+	spark_quad.material = spark_mat
+
+	var dust_mat := StandardMaterial3D.new()
+	dust_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dust_mat.albedo_color = Color(0.8, 0.75, 0.65, 0.45)
+	dust_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	var dust_quad := QuadMesh.new()
+	dust_quad.size = Vector2(0.25, 0.25)
+	dust_quad.material = dust_mat
+
+	spark_pool.clear()
+	dust_pool.clear()
+	for i in 10:
+		spark_pool.append(_make_vfx_emitter(spark_quad, 20, 0.4))
+	for i in 8:
+		dust_pool.append(_make_vfx_emitter(dust_quad, 14, 0.5))
+
+func _make_vfx_emitter(quad: QuadMesh, amount: int, life: float) -> GPUParticles3D:
 	var p := GPUParticles3D.new()
-	p.amount = 24 if heavy else 12
-	p.lifetime = 0.4
-	p.position = pos
+	p.amount = amount
+	p.lifetime = life
+	p.one_shot = true
+	p.emitting = false
+	p.draw_pass_1 = quad
 	var pm := ParticleProcessMaterial.new()
 	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	pm.emission_sphere_radius = 0.15
+	pm.emission_sphere_radius = 0.12
 	pm.direction = Vector3(0, 1, 0)
-	pm.spread = 80.0
-	pm.initial_velocity_min = 3.0
-	pm.initial_velocity_max = 7.0
+	pm.spread = 90.0
+	pm.initial_velocity_min = 2.5
+	pm.initial_velocity_max = 6.5
 	pm.gravity = Vector3(0, -12, 0)
-	pm.damping_min = 2.0
-	pm.damping_max = 4.0
+	pm.damping_min = 1.5
+	pm.damping_max = 3.0
 	p.process_material = pm
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.06, 0.06)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(1.0, 0.85, 0.4)
-	mat.emissive_enabled = true
-	mat.emission = Color(1.0, 0.7, 0.2)
-	quad.material = mat
-	p.draw_pass_1 = quad
-	p.one_shot = true
-	p.emitting = true
 	add_child(p)
-	# 自动回收
-	p.finished.connect(p.queue_free)
+	return p
+
+func _spawn_sparks(pos: Vector3, heavy: bool) -> void:
+	if spark_pool.is_empty():
+		return
+	_emit_from_pool(spark_pool, pos)
+	if heavy:
+		_emit_from_pool(spark_pool, pos + Vector3(0, 0.15, 0))
 
 func _spawn_dust_ring(pos: Vector3, heavy: bool) -> void:
-	var p := GPUParticles3D.new()
-	p.amount = 16 if heavy else 8
-	p.lifetime = 0.5
-	p.position = pos
-	var pm := ParticleProcessMaterial.new()
-	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
-	pm.emission_sphere_radius = 0.1
-	pm.direction = Vector3(0, 0.3, 0)
-	pm.spread = 180.0
-	pm.initial_velocity_min = 1.5
-	pm.initial_velocity_max = 3.0
-	pm.gravity = Vector3(0, -4, 0)
-	pm.damping_min = 1.5
-	pm.damping_max = 2.5
-	p.process_material = pm
-	var quad := QuadMesh.new()
-	quad.size = Vector2(0.25, 0.25)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(0.8, 0.75, 0.65, 0.6)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	quad.material = mat
-	p.draw_pass_1 = quad
-	p.one_shot = true
+	if dust_pool.is_empty():
+		return
+	var ground := Vector3(pos.x, 0.06, pos.z)
+	_emit_from_pool(dust_pool, ground)
+	if heavy:
+		_emit_from_pool(dust_pool, ground)
+
+func _emit_from_pool(pool: Array, pos: Vector3) -> void:
+	var p: GPUParticles3D = pool[pool_idx % pool.size()]
+	pool_idx = (pool_idx + 1) % pool.size()
+	p.global_position = pos
+	p.emitting = false
+	p.restart()
 	p.emitting = true
-	add_child(p)
-	p.finished.connect(p.queue_free)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST and player:
 		player.save_game()
+
+# ---------------- 场景点缀 ----------------
+## 环形分布的残碑石墩，打破大片空地的空旷感（带碰撞，绕行有空间感）
+func _build_props() -> void:
+	var stone_mat := StandardMaterial3D.new()
+	stone_mat.albedo_color = Color(0.15, 0.15, 0.17)
+	stone_mat.roughness = 0.9
+	for i in 10:
+		var a := TAU * float(i) / 10.0 + 0.35
+		var r := 8.0 + float(i % 3) * 2.2
+		var h := 0.8 + float(i % 2) * 0.7
+		var body := StaticBody3D.new()
+		body.position = Vector3(cos(a) * r, h * 0.5, sin(a) * r)
+		body.rotation.y = a + 0.4
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.55, h, 0.55)
+		mi.mesh = bm
+		mi.material_override = stone_mat
+		body.add_child(mi)
+		var cs := CollisionShape3D.new()
+		var shape := BoxShape3D.new()
+		shape.size = bm.size
+		cs.shape = shape
+		body.add_child(cs)
+		add_child(body)
 
 # ---------------- 天气 / 难度 ----------------
 func _build_rain() -> void:
