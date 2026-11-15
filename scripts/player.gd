@@ -1286,6 +1286,9 @@ func _on_parry_counter(attacker: Node) -> void:
 	Sfx.play("parry")
 	# 反打：削对方架势（大概率直接崩坏），并轻微掉血
 	if attacker and is_instance_valid(attacker) and attacker.has_method("take_hit"):
+		# 识破无视格挡：先强制收起对方的防御
+		if "blocking" in attacker:
+			attacker.set("blocking", false)
 		attacker.call("take_hit", 1.0, C.PARRY_COUNTER_POISE, global_position, 9.0, self)
 	# 命中反馈：停顿 + 震动 + 火花
 	var m := get_parent()
