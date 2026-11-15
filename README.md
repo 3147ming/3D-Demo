@@ -5,7 +5,7 @@
 ## 环境
 
 - **Godot 4.3 或更高**（Forward Plus 渲染器）
-- 不依赖任何外部资产，所有模型/材质程序化生成，方便你后续在编辑器里替换为美术资源。
+- 默认不依赖外部资产，模型/材质程序化生成；接入 GLB 的方法见下文。
 
 ## 运行
 
@@ -64,7 +64,7 @@
 
 ## 项目结构
 
-```
+```text
 ink-blade-godot/
 ├── project.godot          # 输入映射、渲染配置
 ├── scenes/
@@ -74,18 +74,110 @@ ink-blade-godot/
 │   ├── player.gd          # 玩家控制与战斗
 │   ├── enemy.gd           # 敌人 AI 状态机
 │   ├── hitbox.gd          # 攻击判定盒
+│   ├── glb_loader.gd      # GLB 模型加载（自动缩放/贴地/找动画）
 │   ├── combat.gd          # 战斗常量
 │   └── healthbar.gd       # 血条（未接入，留作扩展）
-└── assets/                # 美术资源目录（待填充）
+└── assets/
+    └── models/            # 放 player.glb / enemy.glb 即自动替换
 ```
+
+## 接入自己的 3D 模型（GLB）
+
+**已做成"放文件就生效"**：把模型放到指定位置、改成指定名字，运行后自动替换，不用改代码。没放文件时继续用程序化占位模型。
+
+### 第一步：准备一个 GLB
+
+没有模型的话，建议先用免费资源试通流程：
+
+- [Kenney Animated Characters](https://kenney.nl/assets/animated-characters-2)：CC0 免费，直接给 GLB，自带待机/跑/攻击动画，最适合第一次测试
+- [Sketchfab](https://sketchfab.com/)：搜 "character glb"，可下载项里选 glTF/GLB
+- [Mixamo](https://www.mixamo.com/)：免费角色+动作，但导出是 FBX，需在 Blender 转 GLB
+
+用 Blender 导出时检查三件事：脚底在原点附近、身高约 1.8 米；格式选 **glTF 2.0 → GLB** 并勾选 **Include → Animations**；贴图内嵌进 GLB 而非引用外部 png。
+
+### 第二步：放进项目
+
+```text
+ink-blade-godot/assets/models/
+├── player.glb     ← 玩家（建议身高 1.8m）
+└── enemy.glb      ← 敌人（建议身高 2.0m）
+```
+
+文件名必须**完全一致且全小写**。只放 `player.glb` 也行，敌人继续用占位模型。
+
+### 第三步：在 Godot 里导入
+
+1. 切回 Godot 窗口，它会自动扫描到新文件
+2. 左侧 FileSystem 能看到 `assets/models/player.glb`
+3. 点该文件，右侧 Import 面板保持默认，点 **Import**
+4. 按 `F5` 运行
+
+### 第四步：看输出面板
+
+加载成功会打印：
+
+```text
+[玩家模型] 已加载 res://assets/models/player.glb | 缩放 1.023 | 动画 5 个
+[玩家模型] 动画列表：idle, run, attack, hurt, death
+[玩家模型] 动画映射：{"idle": "idle", "run": "run", ...}
+```
+
+| 输出 | 含义 |
+|---|---|
+| 上面这三行 | 加载成功 |
+| `未找到 ... 继续使用程序化占位模型` | 路径或文件名不对 |
+| `加载失败` | Godot 还没导入完，等几秒再运行 |
+
+### 第五步：方向或大小不对
+
+**方向反了（背对镜头）**：打开 `scripts/player.gd`，在 `_setup_visual()` 末尾加一行：
+
+```gdscript
+visual_root.rotation.y = PI
+```
+
+**大小不对**：改脚本顶部常量即可。加载器会按包围盒自动把模型缩放到该身高，并自动贴地，不用手算缩放：
+
+```gdscript
+const VISUAL_HEIGHT := 1.8   # player.gd
+const VISUAL_HEIGHT := 2.0   # enemy.gd
+```
+
+### 第六步：动画名不匹配
+
+加载器按关键词自动匹配（英文大小写不敏感），规则在 `ANIM_HINTS`：
+
+| 状态 | 匹配含这些词的动画 |
+|---|---|
+| 待机 | idle / stand / breath |
+| 跑动 | run / walk / jog / move |
+| 攻击 | attack / slash / swing / combo / punch |
+| 闪避 | dodge / roll / evade |
+| 识破 | parry / block / guard |
+| 受伤 | hurt / hit / damage / impact |
+| 死亡 | death / die / dead |
+
+比如动画叫 `SwordSlash01` 也能匹配到"攻击"。完全匹配不上时，在 `_setup_visual()` 末尾手动指定：
+
+```gdscript
+anim_map["attack"] = "你的动画名"   # 名字区分大小写，取输出面板里的原文
+```
+
+### 常见问题
+
+| 现象 | 处理 |
+|---|---|
+| 模型粉红/纯白 | 贴图没内嵌，重新导出 GLB |
+| 悬空或陷进地板 | 加载器会按包围盒自动贴地；仍异常就在 Blender 把原点放到脚底 |
+| 人物横躺 | 导出坐标轴不对，Blender 里设 +Y 向上 |
+| 站着滑行不摆腿 | GLB 里没动画，或动画名未匹配，先看输出面板的动画列表 |
+| 两把武器叠一起 | 程序化武器已自动隐藏；若仍可见，确认 `weapon_mesh.visible = false` 生效 |
 
 ## 下一步（需在编辑器内手工完成）
 
-1. **替换占位模型**：当前角色/武器/敌人都是胶囊+圆柱。把 `player.gd`/`enemy.gd` 里的 `_build_self()` 改成加载你做的 GLB 模型即可。
-2. **动画**：当前攻击是 `Tween` 驱动的棍子旋转。接入 `AnimationPlayer` 后把 `_start_attack` 里的 tween 换成 `play("atk_light")`。
-3. **场景/关卡**：`main.gd` 的 `_build_world()` 只有一块地板和六根柱子。在编辑器里搭关卡更直观。
-4. **音效/特效**：攻击命中时加粒子和音效。
-5. **打包**：项目 → 导出 → 选择 Windows / 平台生成安装包。
+1. **关卡**：`main.gd` 的 `_build_world()` 目前只有一块地板和六根柱子，在编辑器里搭场景更直观。
+2. **特效**：攻击命中时加粒子与打击音效。
+3. **打包**：项目 → 导出 → 选择 Windows / 平台生成安装包。
 
 ## 设计说明
 

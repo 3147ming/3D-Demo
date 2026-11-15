@@ -8,6 +8,19 @@ signal posture_broken_signal
 signal died(pos: Vector3)
 
 const C = preload("res://scripts/combat.gd")
+const GlbLoader = preload("res://scripts/glb_loader.gd")
+
+# ---- 模型接入：把文件放到 assets/models/ 下即可自动生效 ----
+const VISUAL_PATH := "res://assets/models/enemy.glb"
+const VISUAL_HEIGHT := 2.0
+const VISUAL_YAW := 0.0      # 模型背对镜头时改成 PI
+const ANIM_HINTS := {
+	"idle": ["idle", "stand", "breath"],
+	"run": ["run", "walk", "jog", "move"],
+	"attack": ["attack", "slash", "swing", "combo", "punch"],
+	"hurt": ["hurt", "hit", "damage", "impact"],
+	"death": ["death", "die", "dead"],
+}
 
 enum State { IDLE, CHASE, ATTACK, HURT, BROKEN, DEAD }
 var state := State.IDLE
@@ -29,7 +42,14 @@ var broken_timer := 0.0
 var target: Node3D = null
 
 var body_mesh: MeshInstance3D
+var weapon_arm: Node3D
 var hitbox: Hitbox
+
+# GLB 视觉（存在模型文件时启用）
+var visual_root: Node3D = null
+var anim_player: AnimationPlayer = null
+var anim_map: Dictionary = {}
+var current_anim := ""
 
 func _ready() -> void:
 	_build_self()
@@ -39,6 +59,22 @@ func _ready() -> void:
 	add_to_group("hurtbox")
 	target = get_tree().get_first_node_in_group("player")
 	orbit_dir = 1.0 if randf() < 0.5 else -1.0
+	_setup_visual()
+
+## 尝试加载 GLB；失败则保持程序化占位模型
+func _setup_visual() -> void:
+	var r := GlbLoader.attach_model(self, VISUAL_PATH, VISUAL_HEIGHT, "[敌人模型]")
+	if r.is_empty():
+		return
+	visual_root = r["root"]
+	visual_root.rotation.y = VISUAL_YAW
+	anim_player = r["anim"]
+	if anim_player != null:
+		anim_map = GlbLoader.auto_map(r["clips"], ANIM_HINTS)
+	if body_mesh != null:
+		body_mesh.visible = false
+	if weapon_arm != null:
+		weapon_arm.visible = false
 
 func _build_self() -> void:
 	var col := CollisionShape3D.new()
@@ -60,9 +96,9 @@ func _build_self() -> void:
 	add_child(body_mesh)
 
 	# 武器（大刀）
-	var arm := Node3D.new()
-	arm.position = Vector3(0.4, 1.4, 0.3)
-	add_child(arm)
+	weapon_arm = Node3D.new()
+	weapon_arm.position = Vector3(0.4, 1.4, 0.3)
+	add_child(weapon_arm)
 	var blade := MeshInstance3D.new()
 	blade.mesh = BoxMesh.new()
 	blade.mesh.size = Vector3(0.1, 2.0, 0.3)
@@ -71,7 +107,7 @@ func _build_self() -> void:
 	bmat.albedo_color = Color(0.85, 0.85, 0.88)
 	bmat.roughness = 0.3
 	blade.material_override = bmat
-	arm.add_child(blade)
+	weapon_arm.add_child(blade)
 
 	hitbox = Hitbox.new()
 	var hs := CollisionShape3D.new()
@@ -79,7 +115,7 @@ func _build_self() -> void:
 	hs.shape.size = Vector3(1.2, 1.6, 2.4)
 	hitbox.add_child(hs)
 	hitbox.position = Vector3(0, 1.2, -1.4)   # look_at 的 -Z 为前方
-	arm.add_child(hitbox)
+	weapon_arm.add_child(hitbox)
 	hitbox.hit_landed.connect(_on_hit_landed)
 
 func _on_hit_landed(pos: Vector3, dmg: float, heavy: bool) -> void:
@@ -99,6 +135,7 @@ func _physics_process(delta: float) -> void:
 		if not is_on_floor():
 			velocity.y -= 18.0 * delta
 		move_and_slide()
+		_sync_anim()
 		return
 
 	# 架势回复
@@ -121,9 +158,38 @@ func _physics_process(delta: float) -> void:
 	if not is_on_floor():
 		velocity.y -= 18.0 * delta
 	move_and_slide()
+	_sync_anim()
 
 func apply_freeze(seconds: float) -> void:
 	freeze_timer = maxf(freeze_timer, seconds)
+
+# ---------------- GLB 动画驱动 ----------------
+func _sync_anim() -> void:
+	if anim_player == null:
+		return
+	var moving := Vector2(velocity.x, velocity.z).length() > 0.3
+	var want := ""
+	match state:
+		State.IDLE:
+			want = _clip("idle")
+		State.CHASE:
+			want = _clip("run") if moving else _clip("idle")
+		State.ATTACK:
+			want = _clip("attack")
+		State.HURT, State.BROKEN:
+			want = _clip("hurt")
+		State.DEAD:
+			want = _clip("death")
+	if want == "" or want == current_anim:
+		return
+	current_anim = want
+	anim_player.play(want, 0.12, 1.0)
+
+func _clip(key: String) -> String:
+	var v: String = String(anim_map.get(key, ""))
+	if v == "":
+		v = String(anim_map.get("idle", ""))
+	return v
 
 func _update_idle(_delta: float) -> void:
 	if target and is_instance_valid(target):

@@ -7,6 +7,21 @@ signal stamina_changed(value: float, maxv: float)
 signal chi_changed(value: float, maxv: float)
 
 const C = preload("res://scripts/combat.gd")
+const GlbLoader = preload("res://scripts/glb_loader.gd")
+
+# ---- 模型接入：把文件放到 assets/models/ 下即可自动生效，缺省则用程序化人形 ----
+const VISUAL_PATH := "res://assets/models/player.glb"
+const VISUAL_HEIGHT := 1.8   # 模型统一缩放到的身高（米），按需要改
+const VISUAL_YAW := 0.0      # 模型背对镜头时改成 PI
+const ANIM_HINTS := {
+	"idle": ["idle", "stand", "breath"],
+	"run": ["run", "walk", "jog", "move"],
+	"attack": ["attack", "slash", "swing", "combo", "punch"],
+	"dodge": ["dodge", "roll", "evade"],
+	"parry": ["parry", "block", "guard"],
+	"hurt": ["hurt", "hit", "damage", "impact"],
+	"death": ["death", "die", "dead"],
+}
 
 # 状态
 enum State { IDLE, MOVE, ATTACK, DODGE, PARRY, HURT, DEAD }
@@ -73,6 +88,12 @@ var weapon_mesh: MeshInstance3D
 var hitbox: Hitbox
 var anim_tween: Tween
 
+# GLB 视觉（存在模型文件时启用）
+var visual_root: Node3D = null
+var anim_player: AnimationPlayer = null
+var anim_map: Dictionary = {}
+var current_anim := ""
+
 # 武器 / 武学 / 装备 / 行囊
 var current_weapon: Dictionary = {}
 var current_style: Dictionary = {}
@@ -122,6 +143,24 @@ func _ready() -> void:
 		stamina_changed.emit(stamina, get_max_stamina())
 	chi = C.PLAYER_MAX_CHI
 	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
+	_setup_visual()
+
+## 尝试加载 GLB；失败则保持程序化人形
+func _setup_visual() -> void:
+	var r := GlbLoader.attach_model(self, VISUAL_PATH, VISUAL_HEIGHT, "[玩家模型]")
+	if r.is_empty():
+		return
+	visual_root = r["root"]
+	visual_root.rotation.y = VISUAL_YAW
+	anim_player = r["anim"]
+	if anim_player != null:
+		anim_map = GlbLoader.auto_map(r["clips"], ANIM_HINTS)
+		print("[玩家模型] 动画映射：", anim_map)
+	# 有真实模型后隐藏程序化人形（节点保留，逻辑仍可运行）
+	if body_pivot != null:
+		body_pivot.visible = false
+	if weapon_mesh != null:
+		weapon_mesh.visible = false
 
 func _build_self() -> void:
 	# 胶囊碰撞
@@ -336,6 +375,9 @@ func _build_weapon_mesh(w: Dictionary) -> MeshInstance3D:
 			mi.mesh = cm2
 			mi.position = Vector3(0, spec.get("length", 2.2) * 0.5, 0)
 	mi.material_override = weapon_emissive
+	# 已接入 GLB 模型时隐藏程序化武器（模型通常自带）
+	if visual_root != null:
+		mi.visible = false
 	return mi
 
 func _apply_reach(reach: float) -> void:
@@ -828,6 +870,10 @@ func _physics_process(delta: float) -> void:
 
 # ---------------- 程序化姿态 ----------------
 func _update_pose(delta: float) -> void:
+	# 有 GLB 模型时改由动画驱动，不再跑程序化姿态
+	if visual_root != null:
+		_sync_anim()
+		return
 	if not body_pivot:
 		return
 
@@ -881,6 +927,43 @@ func _update_pose(delta: float) -> void:
 		arm_R.rotation.x = lerp(arm_R.rotation.x, -breathe, 0.12)
 		forearm_L.rotation.x = lerp(forearm_L.rotation.x, 0.0, 0.12)
 		forearm_R.rotation.x = lerp(forearm_R.rotation.x, 0.0, 0.12)
+
+# ---------------- GLB 动画驱动 ----------------
+## 按战斗状态切换动画；同名动画不会重复重启
+func _sync_anim() -> void:
+	if anim_player == null:
+		return
+	var want := ""
+	match state:
+		State.IDLE:
+			want = _clip("idle")
+		State.MOVE:
+			want = _clip("run")
+		State.ATTACK:
+			want = _clip("attack")
+		State.DODGE:
+			want = _clip("dodge")
+		State.PARRY:
+			want = _clip("parry")
+		State.HURT:
+			want = _clip("hurt")
+		State.DEAD:
+			want = _clip("death")
+	if want == "" or want == current_anim:
+		return
+	current_anim = want
+	var spd := 1.0
+	if state == State.MOVE:
+		# 跑步动画随实际移动速度加速/减速
+		spd = clampf(Vector2(velocity.x, velocity.z).length() / maxf(1.0, C.PLAYER_SPEED), 0.6, 1.6)
+	anim_player.play(want, 0.15, spd)
+
+## 取动画名；缺该项时回退到 idle，避免卡在上一个姿势
+func _clip(key: String) -> String:
+	var v: String = String(anim_map.get(key, ""))
+	if v == "":
+		v = String(anim_map.get("idle", ""))
+	return v
 
 # ---------------- 武器拖尾 ----------------
 func _get_weapon_tip_pos() -> Vector3:
