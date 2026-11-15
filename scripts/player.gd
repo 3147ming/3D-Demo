@@ -50,6 +50,8 @@ var combo_buffer := 0.0
 var attack_timer := 0.0
 var attack_phase := ""  # startup / active / recovery
 var current_attack: Dictionary = {}
+## 起手次数（供敌人读取，用于判断"玩家开始攻击"从而决定是否格挡）
+var attack_count := 0
 
 # 闪避
 var dodge_dir := Vector3.ZERO
@@ -1293,6 +1295,19 @@ func _on_parry_counter(attacker: Node) -> void:
 	# 识破后短暂无敌，避免同帧被连击
 	blink_invuln = maxf(blink_invuln, 0.3)
 
+# ---------------- 弹刀 ----------------
+## 攻击被敌人格挡：中断攻击、武器被弹开、轻微后坐
+func _on_attack_blocked() -> void:
+	# 只有真的在挥刀时才需要中断（识破等非攻击动作不受影响）
+	if state != State.ATTACK:
+		return
+	_cancel_attack()
+	var t := create_tween()
+	t.tween_property(weapon_pivot, "rotation", Vector3(-0.35, 0.6, 0.5), 0.06)
+	t.tween_property(weapon_pivot, "rotation", Vector3.ZERO, 0.18)
+	velocity += transform.basis.z * 3.0
+	blink_invuln = maxf(blink_invuln, 0.12)
+
 # ---------------- 攻击取消 ----------------
 ## 闪避打断攻击时清干净残留状态，避免延迟触发的判定盒造成"幽灵命中"
 func _cancel_attack() -> void:
@@ -1319,6 +1334,7 @@ func _cancel_attack() -> void:
 
 # ---------------- 攻击 ----------------
 func _start_attack(atk: Dictionary, _dir: String = "neutral", heavy: bool = false, charge_level: int = 0) -> void:
+	attack_count += 1
 	if stamina < float(atk.get("stamina", 8.0)):
 		return
 	heavy_flag = heavy

@@ -21,6 +21,7 @@ const ANIM_HINTS := {
 	"run": ["run", "walk", "jog", "move"],
 	"attack": ["attack", "slash", "swing", "combo", "punch"],
 	"hurt": ["hurt", "hit", "damage", "impact"],
+	"block": ["block", "guard", "blocking", "parry"],
 	"death": ["death", "die", "dead"],
 }
 const LOOP_WORDS := ["idle", "walk", "run", "blocking", "spellcasting", "aiming"]
@@ -49,6 +50,14 @@ var orbit_dir := 1.0
 var attack_cooldown := 0.0
 var broken_timer := 0.0
 var target: Node3D = null
+# 格挡
+var blocking := false
+var block_timer := 0.0
+var block_cooldown := 0.0
+var block_chance := 0.35
+var last_seen_attack_count := 0
+# 连招
+var combo_left := 0
 
 var body_mesh: MeshInstance3D
 var weapon_arm: Node3D
@@ -149,6 +158,14 @@ func _physics_process(delta: float) -> void:
 		_sync_anim()
 		return
 
+	# 格挡计时
+	if block_cooldown > 0.0:
+		block_cooldown = maxf(0.0, block_cooldown - delta)
+	if blocking:
+		block_timer -= delta
+		if block_timer <= 0.0:
+			_end_block()
+
 	# 架势回复
 	if state != State.BROKEN and state != State.HURT:
 		poise = min(poise + C.ENEMY_POISE_REGEN * delta, C.ENEMY_MAX_POISE)
@@ -184,7 +201,10 @@ func _sync_anim() -> void:
 		State.IDLE:
 			want = _clip("idle")
 		State.CHASE:
-			want = _clip("run") if moving else _clip("idle")
+			if blocking:
+				want = _clip("block")
+			else:
+				want = _clip("run") if moving else _clip("idle")
 		State.ATTACK:
 			want = _attack_clip()
 		State.HURT, State.BROKEN:
@@ -226,6 +246,18 @@ func _update_chase(delta: float) -> void:
 	var dir_n := dir.normalized()
 	look_at(global_position + dir_n, Vector3.UP)
 
+	# 玩家起手攻击的瞬间，有概率举刀格挡
+	var atk_count := _read_target_attack_count()
+	if atk_count != last_seen_attack_count:
+		last_seen_attack_count = atk_count
+		if dist < 3.6 and block_cooldown <= 0.0 and randf() < block_chance:
+			_start_block()
+
+	if blocking:
+		velocity.x = 0.0
+		velocity.z = 0.0
+		return
+
 	var allowed := _request_token()
 
 	if dist > C.ENEMY_ATTACK_RANGE or not allowed:
@@ -258,6 +290,8 @@ func _release_token() -> void:
 		m.release_attack(self)
 
 func _start_attack() -> void:
+	if blocking:
+		_end_block()
 	state = State.ATTACK
 	velocity.x = 0.0
 	velocity.z = 0.0
@@ -265,6 +299,12 @@ func _start_attack() -> void:
 	attack_clip = ""
 	if ATTACK_CLIPS.size() > 0:
 		attack_clip = ATTACK_CLIPS[randi() % ATTACK_CLIPS.size()]
+	# 连招：1 段保底，概率追加到 2-3 段
+	combo_left = 1
+	if randf() < 0.55:
+		combo_left += 1
+	if randf() < feint_chance:
+		combo_left += 1
 	# 佯攻：虚晃一枪后撤，逼迫玩家提前闪避
 	if randf() < feint_chance:
 		attack_phase = "feint"
@@ -272,6 +312,47 @@ func _start_attack() -> void:
 	else:
 		attack_phase = "startup"
 		attack_timer = 0.5
+
+# ---------------- 格挡 ----------------
+func _start_block() -> void:
+	blocking = true
+	block_timer = 0.55
+	if weapon_arm:
+		weapon_arm.rotation = Vector3(-0.9, 0.0, 0.35)
+
+func _end_block() -> void:
+	blocking = false
+	block_timer = 0.0
+	if weapon_arm:
+		weapon_arm.rotation = Vector3.ZERO
+
+func _read_target_attack_count() -> int:
+	if not target or not is_instance_valid(target):
+		return 0
+	var v: Variant = target.get("attack_count")
+	return int(v) if v != null else 0
+
+## 成功格挡：不扣血，但削架势，并把玩家武器弹开
+func _on_blocked(poi: float, attacker: Node) -> void:
+	blocking = false
+	block_timer = 0.0
+	block_cooldown = 1.4
+	if weapon_arm:
+		weapon_arm.rotation = Vector3.ZERO
+	sfx.play("parry")
+	poise -= poi * 0.45
+	posture_changed.emit(poise, C.ENEMY_MAX_POISE)
+	if poise <= 0.0:
+		poise = 0.0
+		state = State.BROKEN
+		broken_timer = C.ENEMY_BREAK_TIME
+		posture_broken_signal.emit()
+		_release_token()
+	var m := get_parent()
+	if m and m.has_method("on_block"):
+		m.call("on_block", global_position - transform.basis.z * 0.9 + Vector3(0, 1.3, 0))
+	if attacker and is_instance_valid(attacker) and attacker.has_method("_on_attack_blocked"):
+		attacker.call("_on_attack_blocked")
 
 func _update_attack(delta: float) -> void:
 	attack_timer -= delta
@@ -293,14 +374,29 @@ func _update_attack(delta: float) -> void:
 			attack_phase = "active"
 			attack_timer = 0.15
 			hitbox.activate(C.ENEMY_ATTACK_DMG * dmg_mult, C.ENEMY_ATTACK_POISE, self, 8.0)
+			# 前压半步，增加压迫感
+			if target and is_instance_valid(target):
+				var fwd := target.global_position - global_position
+				fwd.y = 0.0
+				fwd = fwd.normalized()
+				velocity.x = fwd.x * 3.5
+				velocity.z = fwd.z * 3.5
 		"active":
 			hitbox.deactivate()
 			attack_phase = "recovery"
 			attack_timer = 0.7
 		"recovery":
-			attack_cooldown = 0.9
-			_release_token()
-			state = State.CHASE
+			if combo_left > 1:
+				# 连招接续：缩短起手再劈一刀
+				combo_left -= 1
+				if ATTACK_CLIPS.size() > 0:
+					attack_clip = ATTACK_CLIPS[randi() % ATTACK_CLIPS.size()]
+				attack_phase = "startup"
+				attack_timer = 0.3
+			else:
+				attack_cooldown = 0.9
+				_release_token()
+				state = State.CHASE
 
 func _update_hurt(delta: float) -> void:
 	hurt_timer -= delta
@@ -318,7 +414,12 @@ func _update_broken(delta: float) -> void:
 		posture_changed.emit(poise, C.ENEMY_MAX_POISE)
 		state = State.CHASE
 
-func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0, _attacker: Node = null) -> void:
+func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0, attacker: Node = null) -> void:
+	if state == State.DEAD:
+		return
+	if blocking:
+		_on_blocked(poi, attacker)
+		return
 	if state in [State.DEAD, State.BROKEN]:
 		if state == State.BROKEN:
 			# 处决伤害加倍

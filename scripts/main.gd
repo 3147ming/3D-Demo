@@ -189,6 +189,7 @@ func _spawn_enemy(pos: Vector3) -> void:
 	e.speed_mult = 1.2 if difficulty == "hard" else 1.0
 	e.dmg_mult = 1.15 if difficulty == "hard" else 1.0
 	e.feint_chance = 0.40 if difficulty == "hard" else 0.25
+	e.block_chance = 0.55 if difficulty == "hard" else 0.35
 	e.died.connect(_on_enemy_died.bind(e))
 	enemies.append(e)
 	if hud_enemy == null:
@@ -240,6 +241,13 @@ func on_player_hit(pos: Vector3, dmg: float, heavy: bool, _arc: String) -> void:
 func on_enemy_hit(pos: Vector3, _dmg: float, _heavy: bool) -> void:
 	_trigger_hit_stop(C.HIT_STOP_LIGHT)
 	_trigger_shake(C.SHAKE_HEAVY, 0.3)
+
+## 攻击被格挡：金属火花 + 轻震屏 + 弹刀音
+func on_block(pos: Vector3) -> void:
+	Sfx.play("parry")
+	_spawn_sparks(pos, true)
+	_spawn_sparks(pos, false)
+	_trigger_shake(C.SHAKE_LIGHT, 0.18)
 	_spawn_hit_vfx(pos, false)
 
 func _trigger_hit_stop(frames: int) -> void:
