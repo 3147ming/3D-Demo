@@ -4,6 +4,7 @@ class_name Enemy
 
 signal hp_changed(value: float, maxv: float)
 signal posture_changed(value: float, maxv: float)
+signal posture_broken_signal
 
 const C = preload("res://scripts/combat.gd")
 
@@ -171,7 +172,7 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> 
 		if poise <= 0:
 			state = State.BROKEN
 			broken_timer = C.ENEMY_BREAK_TIME
-			posture_broken_signal()
+			posture_broken_signal.emit()
 		else:
 			state = State.HURT
 			hurt_timer = 0.25
@@ -179,5 +180,3 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0) -> 
 		hp = 0
 		state = State.DEAD
 		queue_free()
-
-signal posture_broken_signal
