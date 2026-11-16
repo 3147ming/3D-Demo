@@ -15,6 +15,14 @@ const UI_DIM := Color(0.57, 0.58, 0.54)
 const UI_TEAL := Color(0.30, 0.65, 0.59)
 const UI_RED := Color(0.65, 0.20, 0.16)
 
+const ICON_DIR := "res://assets/icons/"
+const SKILL_ICON := {
+	"freeze": "spell_freeze",
+	"blink": "spell_blink",
+	"shield": "spell_shield",
+	"transform": "transform",
+}
+
 @onready var sfx: Node = get_node("/root/Sfx")
 
 var player: CharacterBody3D
@@ -141,7 +149,7 @@ func _build_world() -> void:
 	ground.mesh.size = Vector2(60, 60)
 	var gmat := StandardMaterial3D.new()
 	gmat.albedo_color = Color(0.27, 0.26, 0.30)
-	# 程序化噪声：让地面有不规则的石质明暗与粗糙度变化
+	# 程序化噪声：作为粗糙度变化；albedo 使用可平铺石板贴图
 	var gnoise := FastNoiseLite.new()
 	gnoise.frequency = 0.05
 	gnoise.fractal_octaves = 3
@@ -150,7 +158,9 @@ func _build_world() -> void:
 	gtex.height = 256
 	gtex.seamless = true
 	gtex.noise = gnoise
-	gmat.albedo_texture = gtex
+	var floor_path := "res://assets/textures/floor_stone.png"
+	if ResourceLoader.exists(floor_path):
+		gmat.albedo_texture = load(floor_path)
 	gmat.uv1_scale = Vector3(10, 10, 1)
 	gmat.roughness = 0.92
 	gmat.roughness_texture = gtex
@@ -179,6 +189,10 @@ func _build_world() -> void:
 		p.position = pos
 		var pm := StandardMaterial3D.new()
 		pm.albedo_color = Color(0.30, 0.28, 0.26)
+		var pillar_path := "res://assets/textures/pillar_stone.png"
+		if ResourceLoader.exists(pillar_path):
+			pm.albedo_texture = load(pillar_path)
+		pm.uv1_scale = Vector3(1, 2, 1)
 		p.material_override = pm
 		add_child(p)
 
@@ -728,6 +742,19 @@ func _build_skill_slot(parent: Control, key: String, title: String, cost: int) -
 	rows.offset_bottom = -7.0
 	rows.add_theme_constant_override("separation", 1)
 	panel.add_child(rows)
+
+	var icon_id: String = SKILL_ICON.get(key, "")
+	if icon_id != "":
+		var icon_path := ICON_DIR + icon_id + ".png"
+		if ResourceLoader.exists(icon_path):
+			var icon_tr := TextureRect.new()
+			icon_tr.custom_minimum_size = Vector2(36, 36)
+			icon_tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			icon_tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			icon_tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			icon_tr.texture = load(icon_path)
+			rows.add_child(icon_tr)
+
 	_hud_label(rows, key, 18, UI_GOLD)
 	_hud_label(rows, title, 15, UI_TEXT)
 	var cost_label := _hud_label(rows, "%d 内力" % cost, 11, UI_DIM)

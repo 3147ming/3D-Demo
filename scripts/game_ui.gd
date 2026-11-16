@@ -6,6 +6,9 @@ const C_GOLD := Color(0.85, 0.72, 0.42)
 const C_TEXT := Color(0.88, 0.86, 0.80)
 const C_DIM := Color(0.66, 0.64, 0.56)
 
+const ICON_DIR := "res://assets/icons/"
+var _icon_cache := {}
+
 const TABS := [
 	{"id": "bag", "label": "行囊 (Tab)"},
 	{"id": "shop", "label": "药铺 (G)"},
@@ -210,7 +213,7 @@ func _build_bag_row(id: String, def: Dictionary) -> void:
 			action = "材料"
 			enabled = false
 
-	_add_row(title, desc, action, enabled, cb)
+	_add_row(title, desc, action, enabled, cb, id)
 
 # ---------------- 药铺 ----------------
 func _build_shop() -> void:
@@ -223,7 +226,7 @@ func _build_shop() -> void:
 			"%s  ×%d" % [def.get("name", id), player.count_item(id)],
 			"%s　售价 %d" % [def.get("desc", ""), price],
 			"购 买", player.money >= price,
-			func(): player.buy_item(id); refresh())
+			func(): player.buy_item(id); refresh(), id)
 
 	_add_note("— 炼制 —")
 	for r in ItemDB.RECIPES:
@@ -243,7 +246,7 @@ func _build_shop() -> void:
 			"炼 %s" % out.get("name", r["out"]),
 			cost_text + "　" + String(out.get("desc", "")),
 			"炼 制", can,
-			func(): player.craft(r); refresh())
+			func(): player.craft(r); refresh(), String(r["out"]))
 	hint_label.text = "材料来自野外采集与敌人掉落 · G 关闭"
 
 # ---------------- 锻造 ----------------
@@ -258,7 +261,7 @@ func _build_forge() -> void:
 		"当前伤害倍率 ×%.2f　下一级需 青灵草 %d · 兽骨 %d · 铜钱 %d" % [
 			player.forge_bonus(), cost.get("herb", 0), cost.get("bone", 0), cost.get("money", 0)],
 		"锻 造", can,
-		func(): player.forge_current(); refresh())
+		func(): player.forge_current(); refresh(), wid)
 	_add_note("锻造提升当前武器的伤害倍率，每级 +6%，上限 +5。切换武学会更换武器，锻造等级按武器分别记录。")
 	hint_label.text = "H 关闭"
 
@@ -287,9 +290,34 @@ func _build_help() -> void:
 	hint_label.text = "P 关闭"
 
 # ---------------- 行工具 ----------------
-func _add_row(title: String, desc: String, action: String, enabled: bool, cb: Callable) -> void:
+func _icon_tex(id: String) -> Texture2D:
+	if id == "":
+		return null
+	if _icon_cache.has(id):
+		return _icon_cache[id]
+	var path := ICON_DIR + id + ".png"
+	var tex: Texture2D = load(path) if ResourceLoader.exists(path) else null
+	_icon_cache[id] = tex
+	return tex
+
+func _make_icon_rect(id: String) -> TextureRect:
+	var tr := TextureRect.new()
+	tr.custom_minimum_size = Vector2(40, 40)
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	var tex := _icon_tex(id)
+	if tex:
+		tr.texture = tex
+	else:
+		tr.visible = false
+	return tr
+
+func _add_row(title: String, desc: String, action: String, enabled: bool, cb: Callable, icon_id := "") -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
+
+	var icon := _make_icon_rect(icon_id)
+	row.add_child(icon)
 
 	var col := VBoxContainer.new()
 	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
