@@ -6,9 +6,12 @@ signal hp_changed(value: float, maxv: float)
 signal stamina_changed(value: float, maxv: float)
 signal chi_changed(value: float, maxv: float)
 signal vfx_requested(kind: StringName, from: Vector3, to: Vector3)
+signal died
+signal revived
 
 const C = preload("res://scripts/combat.gd")
 const GlbLoader = preload("res://scripts/glb_loader.gd")
+const ModelPalette = preload("res://scripts/model_palette.gd")
 
 @onready var sfx: Node = get_node("/root/Sfx")
 
@@ -167,6 +170,7 @@ func _setup_visual() -> void:
 		return
 	visual_root = r["root"]
 	visual_root.rotation.y = VISUAL_YAW
+	ModelPalette.apply(visual_root, "player")
 	anim_player = r["anim"]
 	if anim_player != null:
 		anim_map = GlbLoader.auto_map(r["clips"], ANIM_HINTS)
@@ -776,6 +780,9 @@ func _heavy_move() -> Dictionary:
 	return current_style.get("heavy", {})
 
 func _unhandled_input(event: InputEvent) -> void:
+	# 死亡期间禁用一切输入（面板、法术、服药、鼠标视角）
+	if state == State.DEAD:
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		yaw -= event.relative.x * 0.003
 		pitch = clamp(pitch - event.relative.y * 0.003, -0.5, 0.35)
@@ -1538,8 +1545,66 @@ func take_hit(dmg: float, _poi: float, from_pos: Vector3, kback: float = 6.0, at
 		anim_tween.kill()
 	weapon_pivot.rotation = Vector3.ZERO
 	if hp <= 0:
-		state = State.DEAD
-		queue_free()  # 临时处理
+		_die()
+
+# ---------------- 死亡 / 复活 ----------------
+## 死亡不销毁节点：只锁状态并发信号，由 main 决定何时复活
+func _die() -> void:
+	hp = 0.0
+	hp_changed.emit(hp, get_max_hp())
+	state = State.DEAD
+	velocity = Vector3.ZERO
+	if anim_tween:
+		anim_tween.kill()
+		anim_tween = null
+	if hitbox:
+		hitbox.deactivate()
+	trail_active = false
+	trail_points.clear()
+	weapon_pivot.rotation = Vector3.ZERO
+	body_pivot.rotation.y = 0.0
+	if weapon_mesh:
+		weapon_mesh.scale = Vector3.ONE
+	lock_target = null
+	blink_invuln = 0.0
+	_sync_anim()
+	sfx.play("death")
+	died.emit()
+
+## 在指定坐标复活并回满资源
+func revive(at: Vector3) -> void:
+	global_position = at
+	velocity = Vector3.ZERO
+	rotation = Vector3.ZERO
+	hp = get_max_hp()
+	stamina = get_max_stamina()
+	chi = C.PLAYER_MAX_CHI
+	buff_speed = 0.0
+	buff_guard = 0.0
+	blink_invuln = 1.5
+	lock_target = null
+	shake_offset = Vector3.ZERO
+	transformed = false
+	transform_timer = 0.0
+	if body_pivot:
+		body_pivot.scale = Vector3.ONE
+	if body_material:
+		body_material.emission_enabled = false
+	state = State.IDLE
+	current_anim = ""
+	# 镜头瞬移到位，避免复活后镜头从死亡点飞过来
+	yaw = 0.0
+	pitch = 0.0
+	cam_yaw = 0.0
+	cam_pitch = 0.0
+	if camera_pivot:
+		camera_pivot.global_position = global_position + Vector3(0, 1.6, 0)
+		camera_pivot.rotation = Vector3.ZERO
+	hp_changed.emit(hp, get_max_hp())
+	stamina_changed.emit(stamina, get_max_stamina())
+	chi_changed.emit(chi, C.PLAYER_MAX_CHI)
+	_sync_anim()
+	revived.emit()
 
 # ---------------- 锁定 ----------------
 func _update_lock(_delta: float) -> void:

@@ -9,6 +9,7 @@ signal died(pos: Vector3)
 
 const C = preload("res://scripts/combat.gd")
 const GlbLoader = preload("res://scripts/glb_loader.gd")
+const ModelPalette = preload("res://scripts/model_palette.gd")
 
 @onready var sfx: Node = get_node("/root/Sfx")
 
@@ -89,6 +90,7 @@ func _setup_visual() -> void:
 		return
 	visual_root = r["root"]
 	visual_root.rotation.y = VISUAL_YAW
+	ModelPalette.apply(visual_root, "enemy")
 	anim_player = r["anim"]
 	if anim_player != null:
 		anim_map = GlbLoader.auto_map(r["clips"], ANIM_HINTS)

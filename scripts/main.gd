@@ -25,6 +25,9 @@ const SKILL_ICON := {
 
 @onready var sfx: Node = get_node("/root/Sfx")
 
+## 死亡重生点（土地庙做好后改为最近休息的庙）
+const RESPAWN_POS := Vector3(0, 0, 8)
+
 var player: CharacterBody3D
 var combat_fx: Node3D
 var enemies: Array = []
@@ -32,6 +35,14 @@ var hud_enemy: Node = null
 var active_attacker: Node = null
 var respawn_timer := 0.0
 var ui: CanvasLayer
+# 死亡流程
+var player_dead := false
+var death_phase := ""
+var death_clock := 0.0
+var death_layer: CanvasLayer
+var death_rect: ColorRect
+var death_title: Label
+var death_hint: Label
 var money_label: Label
 var buff_label: Label
 var status_label: Label
@@ -78,6 +89,7 @@ func _ready() -> void:
 	_spawn_enemies()
 	_build_hud()
 	_build_ui()
+	_build_death_overlay()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _build_world() -> void:
@@ -88,8 +100,8 @@ func _build_world() -> void:
 	env.environment.background_mode = Environment.BG_COLOR
 	env.environment.background_color = Color(0.06, 0.065, 0.085)
 	env.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.environment.ambient_light_color = Color(0.26, 0.24, 0.32)
-	env.environment.ambient_light_energy = 1.0
+	env.environment.ambient_light_color = Color(0.30, 0.28, 0.36)
+	env.environment.ambient_light_energy = 1.2
 	env.environment.fog_enabled = true
 	env.environment.fog_light_color = Color(0.18, 0.17, 0.22)
 	env.environment.fog_density = 0.01
@@ -98,7 +110,7 @@ func _build_world() -> void:
 	# SSAO
 	env.environment.ssao_enabled = true
 	env.environment.ssao_radius = 1.2
-	env.environment.ssao_intensity = 1.5
+	env.environment.ssao_intensity = 1.2
 	env.environment.ssao_power = 1.5
 	# 辉光：只保留 1-4 级、阈值高于 1，避免整屏溢光
 	env.environment.glow_enabled = true
@@ -111,8 +123,8 @@ func _build_world() -> void:
 		env.environment.set("glow_levels/" + str(i), i <= 4)
 	# 色彩分级（暗部偏冷青，亮部偏暖橙）
 	env.environment.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.environment.tonemap_exposure = 1.0
-	env.environment.adjustment_brightness = 0.95
+	env.environment.tonemap_exposure = 1.12
+	env.environment.adjustment_brightness = 1.05
 	env.environment.adjustment_contrast = 1.08
 	env.environment.adjustment_saturation = 1.02
 	env.environment.adjustment_enabled = true
@@ -121,7 +133,7 @@ func _build_world() -> void:
 	# 主光（侧逆光，拉出轮廓）
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-52, -35, 12)
-	sun.light_energy = 1.9
+	sun.light_energy = 2.05
 	sun.light_color = Color(0.95, 0.88, 0.78)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 0.8
@@ -210,6 +222,7 @@ func _spawn_player() -> void:
 	player.set_script(PlayerScript)
 	player.position = Vector3(0, 0, 4)
 	add_child(player)
+	player.connect("died", Callable(self, "_on_player_died"))
 
 func _build_combat_fx() -> void:
 	combat_fx = Node3D.new()
@@ -242,10 +255,10 @@ func _on_enemy_died(_pos: Vector3, e: Node) -> void:
 	if hud_enemy == e:
 		hud_enemy = null
 	var drops := ["herb", "bloodsand", "bone", "ghostfire"]
-	player.add_item(drops[randi() % drops.size()], 1)
-	player.money += 15
+	if is_instance_valid(player):
+		player.add_item(drops[randi() % drops.size()], 1)
+		player.money += 15
 	sfx.play("coin")
-	player.save_game()
 	respawn_timer = 7.0
 	# 击杀慢镜头
 	_trigger_slowmo(C.SLOWMO_KILL, C.SLOWMO_KILL_SCALE)
@@ -452,11 +465,11 @@ func cycle_weather() -> void:
 		if weather == "rain":
 			e.fog_density = 0.028
 			e.fog_light_color = Color(0.10, 0.12, 0.16)
-			e.ambient_light_energy = 0.8
+			e.ambient_light_energy = 0.95
 		else:
 			e.fog_density = 0.018
 			e.fog_light_color = Color(0.12, 0.10, 0.14)
-			e.ambient_light_energy = 1.1
+			e.ambient_light_energy = 1.25
 
 ## 环境浮尘/余烬粒子（跟随玩家飘动）
 func _build_ambient_particles() -> void:
@@ -504,6 +517,117 @@ func _build_ui() -> void:
 	ui.setup(player)
 	player.ui = ui
 
+# ---------------- 死亡与复活 ----------------
+func _build_death_overlay() -> void:
+	death_layer = CanvasLayer.new()
+	death_layer.layer = 100
+	add_child(death_layer)
+	death_rect = ColorRect.new()
+	death_rect.color = Color(0.015, 0.017, 0.020, 1.0)
+	death_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	death_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	death_rect.modulate.a = 0.0
+	death_rect.visible = false
+	death_layer.add_child(death_rect)
+
+	death_title = Label.new()
+	death_title.text = "死"
+	death_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	death_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	death_title.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	death_title.add_theme_font_size_override("font_size", 120)
+	death_title.add_theme_color_override("font_color", Color(0.72, 0.18, 0.14))
+	death_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	death_layer.add_child(death_title)
+
+	death_hint = Label.new()
+	death_hint.text = "回生 · 土地庙"
+	death_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	death_hint.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	death_hint.offset_top = -180.0
+	death_hint.offset_bottom = -140.0
+	death_hint.offset_left = -160.0
+	death_hint.offset_right = 160.0
+	death_hint.add_theme_font_size_override("font_size", 20)
+	death_hint.add_theme_color_override("font_color", UI_GOLD_DIM)
+	death_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	death_layer.add_child(death_hint)
+
+func _on_player_died() -> void:
+	if player_dead:
+		return
+	player_dead = true
+	death_phase = "in"
+	death_clock = 0.0
+	death_rect.modulate.a = 0.0
+	death_rect.visible = true
+	death_title.modulate.a = 0.0
+	death_hint.modulate.a = 0.0
+	if ui and ui.has_method("close"):
+		ui.close()
+	# 死亡时清掉慢镜头/停顿，避免黑屏过渡被拖慢
+	slowmo_timer = 0.0
+	slowmo_scale = 1.0
+	hit_stop_frames = 0
+	Engine.time_scale = 1.0
+	# 敌人停手，避免围着尸体继续劈
+	for e in enemies:
+		if is_instance_valid(e):
+			e.set_physics_process(false)
+	_trigger_shake(C.SHAKE_BREAK, 0.5)
+	# 解锁鼠标，便于后续菜单操作
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+func _update_death(delta: float) -> void:
+	death_clock += delta
+	match death_phase:
+		"in":
+			var a: float = clampf(death_clock / 0.9, 0.0, 1.0)
+			death_rect.modulate.a = a
+			death_title.modulate.a = clampf((death_clock - 0.15) / 0.5, 0.0, 1.0)
+			death_hint.modulate.a = clampf((death_clock - 0.55) / 0.5, 0.0, 1.0)
+			if death_clock >= 1.4:
+				death_phase = "hold"
+				death_clock = 0.0
+				_respawn_player()
+		"hold":
+			if death_clock >= 1.0:
+				death_phase = "out"
+				death_clock = 0.0
+		"out":
+			death_rect.modulate.a = 1.0 - clampf(death_clock / 0.7, 0.0, 1.0)
+			death_title.modulate.a = death_rect.modulate.a
+			death_hint.modulate.a = death_rect.modulate.a
+			if death_clock >= 0.7:
+				death_phase = ""
+				death_rect.visible = false
+				player_dead = false
+				for e in enemies:
+					if is_instance_valid(e):
+						e.set_physics_process(true)
+				Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+func _respawn_player() -> void:
+	if not is_instance_valid(player):
+		return
+	player.revive(RESPAWN_POS)
+	_reset_encounter()
+	# 重置出来的敌人先冻结，等黑屏淡出后再放行
+	for e in enemies:
+		if is_instance_valid(e):
+			e.set_physics_process(false)
+
+## 世界重置：清空全部敌人后按初始编组重新生成
+func _reset_encounter() -> void:
+	for e in enemies:
+		if is_instance_valid(e):
+			e.queue_free()
+	enemies.clear()
+	hud_enemy = null
+	active_attacker = null
+	respawn_timer = 0.0
+	_spawn_enemies()
+
 func _process(_delta: float) -> void:
 	# ---- 命中反馈 ----
 	# hit-stop 帧计数（注意：time_scale 低时 _process 仍按真实帧调用）
@@ -531,9 +655,9 @@ func _process(_delta: float) -> void:
 			shake_intensity = 0.0
 			player.shake_offset = Vector3.ZERO
 
-	if money_label and player:
+	if money_label and is_instance_valid(player):
 		money_label.text = "铜钱  %d" % player.money
-	if buff_label and player:
+	if buff_label and is_instance_valid(player):
 		var parts: Array = []
 		if player.buff_speed > 0.0:
 			parts.append("清风 %.0fs" % player.buff_speed)
@@ -552,8 +676,12 @@ func _process(_delta: float) -> void:
 	_update_target_hud()
 	_update_skill_hud()
 
+	# 死亡流程
+	if death_phase != "":
+		_update_death(_delta)
+
 	# 敌人补充
-	if respawn_timer > 0.0:
+	if not player_dead and respawn_timer > 0.0:
 		respawn_timer -= _delta
 		if respawn_timer <= 0.0 and enemies.size() < 3:
 			var a := randf() * TAU
@@ -798,7 +926,7 @@ func _refresh_player_chi(value: float, max_value: float) -> void:
 	player_chi_value.text = "%d / %d" % [ceili(value), int(max_value)]
 
 func _update_target_hud() -> void:
-	if not player or not target_panel:
+	if not is_instance_valid(player) or not target_panel:
 		return
 	var locked: Node3D = player.lock_target
 	if is_instance_valid(locked) and locked in enemies and locked.hp > 0.0:
@@ -830,7 +958,7 @@ func _pick_hud_enemy() -> void:
 	hud_enemy = best
 
 func _update_skill_hud() -> void:
-	if not player or skill_slots.is_empty():
+	if not is_instance_valid(player) or skill_slots.is_empty():
 		return
 	_update_skill_slot("freeze", C.SPELL_FREEZE)
 	_update_skill_slot("blink", C.SPELL_BLINK)
