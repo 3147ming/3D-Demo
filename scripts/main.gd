@@ -231,7 +231,9 @@ func _build_combat_fx() -> void:
 	combat_fx.setup(self, player)
 
 func _spawn_enemies() -> void:
-	var spawns := [Vector3(0, 0, -4), Vector3(-3.6, 0, -6.6), Vector3(3.6, 0, -6.6)]
+	# 开局编组：三个敌人拉开距离分散在广场前方，且都落在警戒半径(6m)之外，
+	# 玩家需要主动靠近才会逐个唤起，避免一开局三只同时冲脸。
+	var spawns := [Vector3(-6.0, 0, -6.0), Vector3(0.5, 0, -10.5), Vector3(6.5, 0, -6.0)]
 	for p in spawns:
 		_spawn_enemy(p)
 

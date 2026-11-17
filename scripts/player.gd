@@ -298,6 +298,9 @@ func _build_self() -> void:
 	tmat.emission = Color(0.6, 0.8, 1.0)
 	tmat.emission_energy_multiplier = 0.9
 	trail_mi.material_override = tmat
+	trail_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 顶点是世界坐标，必须让节点不吃角色变换，否则拖尾会被旋转/位移成一大片「墙」
+	trail_mi.top_level = true
 	add_child(trail_mi)
 
 	# 相机（放置在 +Z 侧，相机自身看向 -Z，正好面向角色）

@@ -136,10 +136,12 @@ func _build_self() -> void:
 	hitbox = Hitbox.new()
 	var hs := CollisionShape3D.new()
 	hs.shape = BoxShape3D.new()
-	hs.shape.size = Vector3(1.2, 1.6, 2.4)
+	hs.shape.size = Vector3(1.6, 1.8, 2.2)
 	hitbox.add_child(hs)
-	hitbox.position = Vector3(0, 1.2, -1.4)   # look_at 的 -Z 为前方
-	weapon_arm.add_child(hitbox)
+	# 挂在根节点：跟随 look_at 朝向。之前挂在 weapon_arm 上，世界高度被抬到 2.6m，
+	# 几乎只在玩家跳跃时才能碰到，导致「大部分攻击没有伤害」
+	hitbox.position = Vector3(0, 1.0, -1.3)
+	add_child(hitbox)
 	hitbox.hit_landed.connect(_on_hit_landed)
 
 func _on_hit_landed(pos: Vector3, dmg: float, heavy: bool) -> void:
@@ -237,10 +239,13 @@ func _attack_clip() -> String:
 		return attack_clip
 	return _clip("attack")
 
+## 警戒半径：只有玩家靠近到这个距离才会被唤起（之前是 14m，几乎全场立刻追人）
+const ALERT_RADIUS := 6.0
+
 func _update_idle(_delta: float) -> void:
 	if target and is_instance_valid(target):
 		var d := global_position.distance_to(target.global_position)
-		if d < 14.0:
+		if d < ALERT_RADIUS:
 			state = State.CHASE
 
 func _update_chase(delta: float) -> void:
