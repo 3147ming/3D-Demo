@@ -33,7 +33,18 @@ const ATTACK_CLIPS := [
 	"1H_Melee_Attack_Slice_Horizontal",
 ]
 
-enum State { IDLE, CHASE, ATTACK, HURT, BROKEN, DEAD }
+# ---- AI 参数 ----
+const ALERT_RADIUS := 6.0        # 警戒半径：玩家进入这个距离才会被唤起
+const LEASH_RADIUS := 12.0       # 脱战半径：玩家拉出这个距离
+const LEASH_TIME := 1.5          # 并且持续这么久，敌人才放弃追击
+const WINDUP_TIME := 0.8         # 攻击前摇（蓄力）
+const COMBO_WINDUP_TIME := 0.45  # 连招后续段的前摇
+const WINDUP_ANIM_SPEED := 0.3   # 蓄力期间的动画播放速度（放慢抬刀）
+const STRIKE_ANIM_SPEED := 1.8   # 出刀瞬间的动画播放速度（加速斩出）
+const HITSTUN_LIGHT := 0.30      # 轻击硬直
+const HITSTUN_HEAVY := 0.52      # 重击硬直
+
+enum State { IDLE, CHASE, ATTACK, HURT, BROKEN, DEAD, RETURN }
 var state := State.IDLE
 
 var hp: float = C.ENEMY_MAX_HP
@@ -61,10 +72,22 @@ var last_seen_attack_count := 0
 var combo_left := 0
 # 动画锁定：播放 Block_Hit 等一次性动画时，暂时不让 _sync_anim 覆盖
 var anim_lock := 0.0
+# 脱战：回出生点
+var home_pos := Vector3.ZERO
+var home_yaw := 0.0
+var leash_timer := 0.0
+# 蓄力前摇时长（连招段更短）
+var windup_time := WINDUP_TIME
+# 受击后仰角度（弧度）
+var recoil := 0.0
+var flash_tween: Tween = null
 
 var body_mesh: MeshInstance3D
+var body_material: StandardMaterial3D
 var weapon_arm: Node3D
 var hitbox: Hitbox
+var telegraph: MeshInstance3D
+var telegraph_mat: StandardMaterial3D
 
 # GLB 视觉（存在模型文件时启用）
 var visual_root: Node3D = null
@@ -81,6 +104,8 @@ func _ready() -> void:
 	add_to_group("hurtbox")
 	target = get_tree().get_first_node_in_group("player")
 	orbit_dir = 1.0 if randf() < 0.5 else -1.0
+	home_pos = global_position
+	home_yaw = rotation.y
 	_setup_visual()
 
 ## 尝试加载 GLB；失败则保持程序化占位模型
@@ -116,6 +141,7 @@ func _build_self() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.70, 0.25, 0.22)
 	mat.roughness = 0.6
+	body_material = mat
 	body_mesh.material_override = mat
 	add_child(body_mesh)
 
@@ -143,6 +169,22 @@ func _build_self() -> void:
 	hitbox.position = Vector3(0, 1.0, -1.3)
 	add_child(hitbox)
 	hitbox.hit_landed.connect(_on_hit_landed)
+
+	# 蓄力警戒区：贴地的一块发光平面，前摇期间逐渐变亮，给玩家读招窗口
+	telegraph = MeshInstance3D.new()
+	var tplane := PlaneMesh.new()
+	tplane.size = Vector2(1.9, 2.8)
+	telegraph.mesh = tplane
+	telegraph.position = Vector3(0, 0.04, -1.5)
+	telegraph_mat = StandardMaterial3D.new()
+	telegraph_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	telegraph_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	telegraph_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	telegraph_mat.albedo_color = Color(1.0, 0.6, 0.1, 0.0)
+	telegraph.material_override = telegraph_mat
+	telegraph.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	telegraph.visible = false
+	add_child(telegraph)
 
 func _on_hit_landed(pos: Vector3, dmg: float, heavy: bool) -> void:
 	var m := get_parent()
@@ -175,6 +217,15 @@ func _physics_process(delta: float) -> void:
 		if block_timer <= 0.0:
 			_end_block()
 
+	# 受击后仰回正
+	if recoil > 0.0:
+		recoil = move_toward(recoil, 0.0, delta * 5.0)
+		_apply_recoil()
+
+	# 脱战判定：玩家跑出 12m 并保持 1.5s，敌人放弃追击回出生点
+	if state == State.CHASE or state == State.ATTACK:
+		_check_leash(delta)
+
 	# 架势回复
 	if state != State.BROKEN and state != State.HURT:
 		poise = min(poise + C.ENEMY_POISE_REGEN * delta, C.ENEMY_MAX_POISE)
@@ -191,6 +242,8 @@ func _physics_process(delta: float) -> void:
 			_update_hurt(delta)
 		State.BROKEN:
 			_update_broken(delta)
+		State.RETURN:
+			_update_return(delta)
 
 	if not is_on_floor():
 		velocity.y -= 18.0 * delta
@@ -220,6 +273,8 @@ func _sync_anim() -> void:
 			want = _attack_clip()
 		State.HURT, State.BROKEN:
 			want = _clip("hurt")
+		State.RETURN:
+			want = _clip("run") if moving else _clip("idle")
 		State.DEAD:
 			want = _clip("death")
 	if want == "" or want == current_anim:
@@ -239,10 +294,8 @@ func _attack_clip() -> String:
 		return attack_clip
 	return _clip("attack")
 
-## 警戒半径：只有玩家靠近到这个距离才会被唤起（之前是 14m，几乎全场立刻追人）
-const ALERT_RADIUS := 6.0
-
 func _update_idle(_delta: float) -> void:
+	leash_timer = 0.0
 	if target and is_instance_valid(target):
 		var d := global_position.distance_to(target.global_position)
 		if d < ALERT_RADIUS:
@@ -323,9 +376,15 @@ func _start_attack() -> void:
 	if randf() < feint_chance:
 		attack_phase = "feint"
 		attack_timer = 0.22
-	else:
-		attack_phase = "startup"
-		attack_timer = 0.5
+		_set_telegraph(false)
+		return
+	# 蓄力前摇：抬刀 + 地面警戒区随蓄力变亮，给玩家反应窗口
+	attack_phase = "windup"
+	windup_time = WINDUP_TIME
+	attack_timer = windup_time
+	if anim_player != null:
+		anim_player.speed_scale = WINDUP_ANIM_SPEED
+	_set_telegraph(true, 0.0)
 
 # ---------------- 格挡 ----------------
 func _start_block() -> void:
@@ -374,6 +433,16 @@ func _on_blocked(poi: float, attacker: Node) -> void:
 		attacker.call("_on_attack_blocked")
 
 func _update_attack(delta: float) -> void:
+	# 蓄力：站定面向玩家、抬刀，地面警戒区随时间变亮
+	if attack_phase == "windup":
+		velocity.x = 0.0
+		velocity.z = 0.0
+		_face_target()
+		var progress := 1.0 - clampf(attack_timer / maxf(windup_time, 0.01), 0.0, 1.0)
+		_set_telegraph(true, progress)
+		if weapon_arm:
+			weapon_arm.rotation.x = -1.9 * progress
+
 	attack_timer -= delta
 	if attack_timer > 0:
 		return
@@ -389,9 +458,15 @@ func _update_attack(delta: float) -> void:
 			attack_cooldown = 1.0
 			_release_token()
 			state = State.CHASE
-		"startup":
+		"windup":
+			# 蓄力结束：收掉警戒区，出刀
 			attack_phase = "active"
 			attack_timer = 0.15
+			_set_telegraph(false)
+			if weapon_arm:
+				weapon_arm.rotation.x = 0.0
+			if anim_player != null:
+				anim_player.speed_scale = STRIKE_ANIM_SPEED
 			hitbox.activate(C.ENEMY_ATTACK_DMG * dmg_mult, C.ENEMY_ATTACK_POISE, self, 8.0)
 			# 前压半步，增加压迫感
 			if target and is_instance_valid(target):
@@ -404,18 +479,115 @@ func _update_attack(delta: float) -> void:
 			hitbox.deactivate()
 			attack_phase = "recovery"
 			attack_timer = 0.7
+			if anim_player != null:
+				anim_player.speed_scale = 1.0
 		"recovery":
 			if combo_left > 1:
-				# 连招接续：缩短起手再劈一刀
+				# 连招接续：缩短前摇再劈一刀
 				combo_left -= 1
 				if ATTACK_CLIPS.size() > 0:
 					attack_clip = ATTACK_CLIPS[randi() % ATTACK_CLIPS.size()]
-				attack_phase = "startup"
-				attack_timer = 0.3
+				attack_phase = "windup"
+				windup_time = COMBO_WINDUP_TIME
+				attack_timer = windup_time
+				if anim_player != null:
+					anim_player.speed_scale = WINDUP_ANIM_SPEED
+				_set_telegraph(true, 0.0)
 			else:
 				attack_cooldown = 0.9
 				_release_token()
 				state = State.CHASE
+
+## 蓄力/出刀期间始终面向玩家
+func _face_target() -> void:
+	if not target or not is_instance_valid(target):
+		return
+	var dir := target.global_position - global_position
+	dir.y = 0.0
+	if dir.length_squared() < 0.0001:
+		return
+	look_at(global_position + dir.normalized(), Vector3.UP)
+
+## 地面警戒区：on=false 隐藏；progress 越大越亮、颜色越红
+func _set_telegraph(on: bool, progress: float = 0.0) -> void:
+	if telegraph == null or telegraph_mat == null:
+		return
+	telegraph.visible = on
+	if not on:
+		return
+	var p := clampf(progress, 0.0, 1.0)
+	telegraph_mat.albedo_color = Color(1.0, lerpf(0.62, 0.16, p), 0.08, lerpf(0.10, 0.62, p))
+
+# ---------------- 脱战 ----------------
+## 放弃追击：清掉当前动作，走回出生点（到家回满血）
+func _start_leash() -> void:
+	if state == State.DEAD:
+		return
+	hitbox.deactivate()
+	_release_token()
+	attack_phase = ""
+	blocking = false
+	block_timer = 0.0
+	anim_lock = 0.0
+	_set_telegraph(false)
+	if weapon_arm:
+		weapon_arm.rotation.x = 0.0
+	if anim_player != null:
+		anim_player.speed_scale = 1.0
+	leash_timer = 0.0
+	state = State.RETURN
+
+func _check_leash(delta: float) -> void:
+	if not target or not is_instance_valid(target):
+		leash_timer = 0.0
+		return
+	if global_position.distance_to(target.global_position) <= LEASH_RADIUS:
+		leash_timer = 0.0
+		return
+	leash_timer += delta
+	if leash_timer >= LEASH_TIME:
+		_start_leash()
+
+func _update_return(_delta: float) -> void:
+	var to_home := home_pos - global_position
+	to_home.y = 0.0
+	var dist := to_home.length()
+	if dist < 0.3:
+		# 回到出生点：站定、转身归位、回满血与架势
+		global_position = home_pos
+		velocity.x = 0.0
+		velocity.z = 0.0
+		rotation.y = home_yaw
+		hp = C.ENEMY_MAX_HP
+		hp_changed.emit(hp, C.ENEMY_MAX_HP)
+		poise = C.ENEMY_MAX_POISE
+		posture_changed.emit(poise, C.ENEMY_MAX_POISE)
+		attack_cooldown = 0.0
+		state = State.IDLE
+		return
+	var dir_n := to_home / dist
+	look_at(global_position + dir_n, Vector3.UP)
+	velocity.x = dir_n.x * C.ENEMY_SPEED * speed_mult
+	velocity.z = dir_n.z * C.ENEMY_SPEED * speed_mult
+
+## 受击后仰：GLB 与程序化模型都能看到
+func _apply_recoil() -> void:
+	if visual_root != null:
+		visual_root.rotation.x = recoil
+	elif body_mesh != null:
+		body_mesh.rotation.x = recoil
+
+## 受击白闪（程序化身体材质）
+func _flash_hit() -> void:
+	if body_material == null:
+		return
+	body_material.emission_enabled = true
+	body_material.emission = Color(1.0, 0.92, 0.80)
+	body_material.emission_energy_multiplier = 2.4
+	if flash_tween != null and flash_tween.is_valid():
+		flash_tween.kill()
+	flash_tween = create_tween()
+	flash_tween.tween_property(body_material, "emission_energy_multiplier", 0.0, 0.18)
 
 func _update_hurt(delta: float) -> void:
 	hurt_timer -= delta
@@ -446,6 +618,18 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0, att
 	hp -= dmg
 	hp_changed.emit(hp, C.ENEMY_MAX_HP)
 	sfx.play("hit")
+	# 受击反馈：后仰 + 白闪 + 打断正在进行的蓄力/挥砍
+	var heavy_hit := poi >= 24.0 or dmg >= 30.0
+	recoil = 0.32 if heavy_hit else 0.16
+	_apply_recoil()
+	_flash_hit()
+	hitbox.deactivate()
+	_set_telegraph(false)
+	attack_phase = ""
+	if weapon_arm:
+		weapon_arm.rotation.x = 0.0
+	if anim_player != null:
+		anim_player.speed_scale = 1.0
 	var dir := (global_position - from_pos).normalized()
 	velocity.x = dir.x * kback
 	velocity.z = dir.z * kback
@@ -459,14 +643,19 @@ func take_hit(dmg: float, poi: float, from_pos: Vector3, kback: float = 6.0, att
 			posture_broken_signal.emit()
 		else:
 			state = State.HURT
-			hurt_timer = 0.25
+			hurt_timer = HITSTUN_HEAVY if heavy_hit else HITSTUN_LIGHT
 	if hp <= 0:
 		hp = 0
 		state = State.DEAD
 		_release_token()
 		hitbox.deactivate()
+		_set_telegraph(false)
+		recoil = 0.0
+		_apply_recoil()
 		anim_lock = 0.0
 		current_anim = ""
+		if anim_player != null:
+			anim_player.speed_scale = 1.0
 		sfx.play("death")
 		died.emit(global_position)
 		# 留一段时间播放死亡动画再移除（原来立即 queue_free，根本看不到死亡动作）
